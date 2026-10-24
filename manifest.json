@@ -1,0 +1,25 @@
+{
+  "name": "Quick Share Hub — Chia sẻ Link, Ghi chú & PDF đa thiết bị (24/7 Cloud)",
+  "short_name": "Quick Share",
+  "description": "Chia sẻ Link, Clipboard, Ghi chú và File PDF tức thì 24/7 giữa PC, Laptop và Điện thoại với đồng bộ đám mây thời gian thực.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#3b82f6",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

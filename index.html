@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+  <meta name="theme-color" content="#0b1120" />
+  <meta name="description" content="Quick Share Hub — Chia sẻ Link, Ghi chú, Clipboard và File PDF tức thì giữa Laptop, PC và Điện thoại." />
+  <title>Quick Share Hub — Chia sẻ Link, Clipboard &amp; File PDF Đa Thiết Bị</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg" />
+  <link rel="apple-touch-icon" href="icons/icon-192.svg" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <div class="brand-logo" aria-hidden="true">⚡</div>
+        <div class="brand-title">
+          <h1>Quick Share Hub</h1>
+          <div class="brand-subtitle">Đồng bộ Link, Clipboard &amp; PDF thời gian thực giữa PC, Laptop &amp; Điện thoại</div>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <div id="wsStatusPill" class="status-pill" title="Trạng thái kết nối thời gian thực">
+          <span class="status-dot"></span>
+          <span id="wsStatusText">Trực tuyến</span>
+        </div>
+
+        <button id="roomSwitchBtn" type="button" class="btn btn-sm" title="Đổi phòng làm việc">
+          <span>🔒 Phòng:</span>
+          <strong id="currentRoomBadge">default</strong>
+        </button>
+
+        <button id="roomQrBtn" type="button" class="btn btn-sm btn-primary" title="Mở mã QR để quét bằng điện thoại">
+          📱 Mã QR Điện Thoại
+        </button>
+
+        <button id="clearRoomBtn" type="button" class="btn btn-sm btn-danger" title="Xóa tất cả mục trong phòng này">
+          🗑️ Xóa tất cả
+        </button>
+      </div>
+    </header>
+
+    <!-- Composer & File Upload Grid -->
+    <section class="composer-grid">
+      <!-- Left: Link / Note / Clipboard Composer -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <div class="panel-title">🔗 Gửi Link, Ghi chú hoặc Clipboard</div>
+          <button id="pasteClipboardBtn" type="button" class="btn btn-sm btn-emerald" title="Đọc từ Clipboard và gửi ngay (1-Click Paste)">
+            📋 Dán từ Clipboard (1-Click)
+          </button>
+        </div>
+
+        <textarea
+          id="itemInput"
+          class="composer-textarea"
+          placeholder="Dán đường dẫn URL (https://...), đoạn văn bản, code hoặc nhấn Ctrl+V bất kỳ đâu để chia sẻ ngay..."
+        ></textarea>
+
+        <div class="composer-footer">
+          <div class="ttl-group">
+            <label for="ttlSelect">⏱️ Tự hủy sau:</label>
+            <select id="ttlSelect" class="ttl-select">
+              <option value="24h" selected>24 giờ</option>
+              <option value="1h">1 giờ</option>
+              <option value="7d">7 ngày</option>
+              <option value="never">Không giới hạn</option>
+            </select>
+          </div>
+
+          <button id="sendItemBtn" type="button" class="btn btn-primary">
+            🚀 Chia sẻ ngay
+          </button>
+        </div>
+      </div>
+
+      <!-- Right: PDF / Document / Image Upload -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <div class="panel-title">📄 Tải lên File PDF / Tài liệu / Ảnh</div>
+          <span style="font-size: 0.76rem; color: var(--text-secondary);">Tối đa 50MB</span>
+        </div>
+
+        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Kéo thả hoặc chọn file để tải lên">
+          <div class="dropzone-icon">📂</div>
+          <div class="dropzone-title">Kéo thả file PDF, Ảnh, Tài liệu vào đây</div>
+          <div class="dropzone-hint">Hoặc bấm để chọn file từ thiết bị • Hỗ trợ xem trước PDF trực tiếp</div>
+          <input id="fileInput" type="file" style="display: none;" multiple />
+        </div>
+
+        <div id="uploadProgress" class="upload-progress">
+          <div id="uploadProgressBar" class="upload-progress-bar"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Filter & Search Bar -->
+    <section class="feed-toolbar">
+      <div class="filter-tabs" role="tablist">
+        <button type="button" class="filter-tab active" data-filter="all">Tất cả (<span id="countAll">0</span>)</button>
+        <button type="button" class="filter-tab" data-filter="link">🔗 Link (<span id="countLink">0</span>)</button>
+        <button type="button" class="filter-tab" data-filter="note">📝 Ghi chú (<span id="countNote">0</span>)</button>
+        <button type="button" class="filter-tab" data-filter="file">📄 PDF &amp; File (<span id="countFile">0</span>)</button>
+      </div>
+
+      <input
+        id="searchInput"
+        type="search"
+        class="search-input"
+        placeholder="🔍 Tìm nhanh link, tên file, nội dung..."
+      />
+    </section>
+
+    <!-- Shared Items Feed -->
+    <main id="itemsContainer" class="items-list" aria-live="polite">
+      <div class="empty-state">Đang tải dữ liệu...</div>
+    </main>
+  </div>
+
+  <!-- QR Code Modal -->
+  <div id="qrModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="qrModalTitle">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="qrModalTitle">📱 Quét mã QR để mở trên Điện thoại</h3>
+        <button id="closeQrModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
+      </div>
+      <div class="qr-display-box">
+        <img id="qrImage" src="" alt="QR Code" />
+      </div>
+      <div id="qrCaption" class="qr-caption"></div>
+      <div style="display: flex; justify-content: center; gap: 8px;">
+        <button id="copyQrTextBtn" type="button" class="btn btn-primary btn-sm">📋 Copy nội dung / Link</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App PDF Preview Modal -->
+  <div id="pdfModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pdfModalTitle">
+    <div class="modal-box modal-xl">
+      <div class="modal-header">
+        <h3 id="pdfModalTitle">📄 Xem trước PDF</h3>
+        <div style="display: flex; gap: 8px;">
+          <a id="pdfModalOpenTab" href="#" target="_blank" rel="noopener" class="btn btn-sm">↗ Mở tab mới</a>
+          <a id="pdfModalDownload" href="#" download class="btn btn-sm btn-primary">⬇ Tải xuống PDF</a>
+          <button id="closePdfModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
+        </div>
+      </div>
+      <iframe id="pdfViewerFrame" class="pdf-viewer-frame" title="PDF Preview"></iframe>
+    </div>
+  </div>
+
+  <!-- Room Switcher Modal -->
+  <div id="roomModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="roomModalTitle">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="roomModalTitle">🔒 Đổi phòng chia sẻ (Workspace Room)</h3>
+        <button id="closeRoomModalBtn" type="button" class="btn btn-sm">✕</button>
+      </div>
+      <p style="font-size: 0.85rem; color: var(--text-secondary);">
+        Nhập tên phòng bất kỳ để tạo không gian riêng giữa các thiết bị của bạn (ví dụ: <code>huy-pc</code>, <code>cong-viec</code>).
+      </p>
+      <input
+        id="roomNameInput"
+        type="text"
+        class="search-input"
+        style="border-radius: 8px; width: 100%;"
+        placeholder="Nhập tên phòng (mặc định: default)"
+      />
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button id="resetDefaultRoomBtn" type="button" class="btn btn-sm">Về phòng mặc định</button>
+        <button id="confirmRoomBtn" type="button" class="btn btn-sm btn-primary">Chuyển phòng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="js/qrcode.min.js"></script>
+  <script src="js/cloud-adapter.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
