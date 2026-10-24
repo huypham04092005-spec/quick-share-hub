@@ -274,7 +274,7 @@
   function renderNoteContentWithLinks(rawText) {
     if (!rawText) return '';
     const str = String(rawText);
-    const fenceRegex = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
+    const fenceRegex = /(`{3,})(?:([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)|[ \t]*([^\r\n`]+?)[ \t]*)\1(?!`)/g;
     let result = '';
     let lastIdx = 0;
     let match;
@@ -282,8 +282,9 @@
       if (match.index > lastIdx) {
         result += renderPlainTextWithLinks(str.slice(lastIdx, match.index));
       }
-      const lang = (match[1] || '').trim() || 'code';
-      const rawCode = match[2].replace(/\r?\n$/, '');
+      const isMultiLine = match[3] !== undefined;
+      const lang = isMultiLine ? ((match[2] || '').trim() || 'code') : 'code';
+      const rawCode = isMultiLine ? match[3].replace(/\r?\n$/, '') : (match[4] || '');
       result += `<div class="note-code-block"><div class="note-code-header"><span class="note-code-lang">${escapeHtml(lang)}</span><button type="button" class="btn btn-sm js-copy-code-btn" data-code="${escapeHtml(rawCode)}">📋 Copy Code</button></div><code class="note-code-content">${escapeHtml(rawCode)}</code></div>`;
       lastIdx = match.index + match[0].length;
     }
@@ -689,11 +690,13 @@
         if (!entry.content) continue;
         const exists = items.some((i) => i.content === entry.content && i.type === entry.type);
         if (exists) continue;
+        const explicitType = (entry.type === 'link' || entry.type === 'note') ? entry.type : undefined;
         const res = await fetch('/api/items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             room: currentRoom,
+            type: explicitType,
             content: String(entry.content),
             title: entry.title || undefined,
             pinned: Boolean(entry.pinned),
@@ -1940,10 +1943,10 @@
     if (e.key === 'Escape') {
       closeAllModals();
       resetClearRoomConfirm();
-    } else if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'c' || e.key === 'C' || e.code === 'KeyC')) {
+    } else if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'c' || e.key === 'C' || e.code === 'KeyC')) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       copyLatestItem();
-    } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) {
+    } else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       if (searchInput) {
         searchInput.focus();

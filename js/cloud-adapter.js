@@ -469,6 +469,7 @@
     lastFetchedAt: 0,
     rooms: new Map(), // room -> Array<Item>
     files: new Map(), // itemId -> { bytes: Uint8Array, mimeType, fileName, isPdf, blobUrl }
+    fileTrash: new Map(), // fileRef -> { bytes: Uint8Array, mimeType, fileName, isPdf, blobUrl }
     deletedIds: new Set(),
     clearedRoomsAt: new Map(),
     dirtyRooms: new Set(),
@@ -1056,6 +1057,30 @@
     return null;
   }
 
+  function isFileRefReferencedInCloud(ref, excludeIdsSet = null) {
+    if (!ref || typeof ref !== 'string') return false;
+    for (const list of cloudState.rooms.values()) {
+      for (const item of list) {
+        if (!item || item.type !== 'file') continue;
+        if (excludeIdsSet && excludeIdsSet.has(item.id)) continue;
+        if (item.fileGistId === ref || item.filePath === ref || item.file_path === ref) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function archiveCloudFileToTrash(item) {
+    if (!item || !item.id) return;
+    const fileEntry = cloudState.files.get(item.id);
+    if (!fileEntry) return;
+    cloudState.fileTrash.set(item.id, fileEntry);
+    const fPath = item.filePath || item.file_path;
+    if (fPath) cloudState.fileTrash.set(String(fPath), fileEntry);
+    if (item.fileGistId) cloudState.fileTrash.set(String(item.fileGistId), fileEntry);
+  }
+
   function makeJsonResponse(bodyObj, status = 200, extraHeaders = {}) {
     return new Response(JSON.stringify(bodyObj), {
       status,
@@ -1158,6 +1183,7 @@
       }
       const now = Date.now();
       const expiredIds = [];
+      const expiredItems = [];
       for (const [room, list] of cloudState.rooms.entries()) {
         const remaining = [];
         const roomExpired = [];
@@ -1165,9 +1191,10 @@
           if (item.expiresAt !== null && item.expiresAt !== undefined && item.expiresAt <= now) {
             expiredIds.push(item.id);
             roomExpired.push(item.id);
+            expiredItems.push(item);
             cloudState.deletedIds.add(item.id);
+            archiveCloudFileToTrash(item);
             cloudState.files.delete(item.id);
-            if (item.fileGistId) deleteCloudFileGist(item.fileGistId);
           } else {
             remaining.push(item);
           }
@@ -1176,6 +1203,11 @@
           cloudState.rooms.set(room, remaining);
           scheduleRoomGistFlush(room);
           broadcastRoomEvent(room, { type: 'items_expired', room, ids: roomExpired });
+        }
+      }
+      for (const item of expiredItems) {
+        if (item.fileGistId && !isFileRefReferencedInCloud(item.fileGistId)) {
+          deleteCloudFileGist(item.fileGistId);
         }
       }
       return makeJsonResponse({
@@ -1200,13 +1232,17 @@
       const room = normalizeRoom(rawRoom);
       const list = getRoomListRef(room);
       const ids = list.map((i) => i.id);
-      for (const item of list) {
-        cloudState.deletedIds.add(item.id);
-        cloudState.files.delete(item.id);
-        if (item.fileGistId) deleteCloudFileGist(item.fileGistId);
-      }
+      const clearedItems = list.slice();
       cloudState.clearedRoomsAt.set(room, Date.now());
       cloudState.rooms.set(room, []);
+      for (const item of clearedItems) {
+        cloudState.deletedIds.add(item.id);
+        archiveCloudFileToTrash(item);
+        cloudState.files.delete(item.id);
+        if (item.fileGistId && !isFileRefReferencedInCloud(item.fileGistId)) {
+          deleteCloudFileGist(item.fileGistId);
+        }
+      }
       scheduleRoomGistFlush(room);
       broadcastRoomEvent(room, { type: 'room_cleared', room, count: ids.length, ids });
       return makeJsonResponse({
@@ -1326,7 +1362,12 @@
 
         if (isFileRestore) {
           const origId = String(rawFilePath).split('_')[0];
-          const existingMemFile = cloudState.files.get(String(rawFilePath)) || cloudState.files.get(origId);
+          const existingMemFile =
+            cloudState.files.get(String(rawFilePath)) ||
+            cloudState.files.get(origId) ||
+            cloudState.fileTrash.get(String(rawFilePath)) ||
+            cloudState.fileTrash.get(origId) ||
+            (body.fileGistId ? cloudState.fileTrash.get(String(body.fileGistId)) : null);
           if (existingMemFile) {
             cloudState.files.set(item.id, existingMemFile);
           }
@@ -1433,8 +1474,9 @@
       }
       cloudState.deletedIds.add(id);
       found.list.splice(found.idx, 1);
+      archiveCloudFileToTrash(found.item);
       cloudState.files.delete(id);
-      if (found.item.fileGistId) {
+      if (found.item.fileGistId && !isFileRefReferencedInCloud(found.item.fileGistId)) {
         deleteCloudFileGist(found.item.fileGistId);
       }
       scheduleRoomGistFlush(found.room);
@@ -1498,13 +1540,16 @@
         expiresAt
       });
 
-      cloudState.files.set(id, {
+      const fileMemEntry = {
         bytes,
         mimeType: item.mimeType,
         fileName: originalName,
         isPdf: Boolean(isPdf),
         blobUrl: null
-      });
+      };
+      cloudState.files.set(id, fileMemEntry);
+      cloudState.fileTrash.set(id, fileMemEntry);
+      cloudState.fileTrash.set(item.filePath, fileMemEntry);
 
       // Upload binary payload to dedicated secret Gist for persistent rooms
       const gistId = await uploadBinaryFileToCloudGist(item, bytes);
@@ -1512,6 +1557,7 @@
         item.fileGistId = gistId;
         item.filePath = gistId;
         item.file_path = gistId;
+        cloudState.fileTrash.set(gistId, fileMemEntry);
       }
 
       const list = getRoomListRef(room);
