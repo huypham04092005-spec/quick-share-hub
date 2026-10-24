@@ -1341,3 +1341,31 @@ body {
 [data-theme="light"] .item-custom-title {
   color: #0f172a;
 }
+
+.domain-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: rgba(14, 165, 233, 0.16);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.32);
+}
+
+[data-theme="light"] .domain-badge {
+  background: rgba(2, 132, 199, 0.12);
+  color: #0369a1;
+  border-color: rgba(2, 132, 199, 0.3);
+}
+
+.item-note-pre strong {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+[data-theme="light"] .item-note-pre strong {
+  color: #0f172a;
+}

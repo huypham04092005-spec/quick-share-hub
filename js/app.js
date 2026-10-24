@@ -51,6 +51,8 @@
   const batchSelectedCount = document.getElementById('batchSelectedCount');
   const batchSelectAllBtn = document.getElementById('batchSelectAllBtn');
   const batchCopySelectedBtn = document.getElementById('batchCopySelectedBtn');
+  const batchDownloadSelectedBtn = document.getElementById('batchDownloadSelectedBtn');
+  const batchPinSelectedBtn = document.getElementById('batchPinSelectedBtn');
   const batchExportSelectedBtn = document.getElementById('batchExportSelectedBtn');
   const batchDeleteSelectedBtn = document.getElementById('batchDeleteSelectedBtn');
   const batchClearSelectionBtn = document.getElementById('batchClearSelectionBtn');
@@ -132,6 +134,7 @@
   const roomNameInput = document.getElementById('roomNameInput');
   const recentRoomsList = document.getElementById('recentRoomsList');
   const closeRoomModalBtn = document.getElementById('closeRoomModalBtn');
+  const randomRoomBtn = document.getElementById('randomRoomBtn');
   const copyRoomLinkBtn = document.getElementById('copyRoomLinkBtn');
   const resetDefaultRoomBtn = document.getElementById('resetDefaultRoomBtn');
   const confirmRoomBtn = document.getElementById('confirmRoomBtn');
@@ -309,6 +312,26 @@
     return { url, trailing };
   }
 
+  function renderTextWithBold(textSlice) {
+    if (!textSlice) return '';
+    const str = String(textSlice);
+    const boldRegex = /\*\*(?!\s)((?:(?!\*\*)[^\r\n])+?)(?<!\s)\*\*/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = boldRegex.exec(str)) !== null) {
+      if (m.index > last) {
+        out += escapeHtml(str.slice(last, m.index));
+      }
+      out += `<strong>${escapeHtml(m[1])}</strong>`;
+      last = m.index + m[0].length;
+    }
+    if (last < str.length) {
+      out += escapeHtml(str.slice(last));
+    }
+    return out;
+  }
+
   function renderPlainTextWithLinks(textSegment) {
     if (!textSegment) return '';
     const str = String(textSegment);
@@ -319,19 +342,19 @@
     while ((match = urlRegex.exec(str)) !== null) {
       const matchStart = match.index;
       if (matchStart > lastIdx) {
-        result += escapeHtml(str.slice(lastIdx, matchStart));
+        result += renderTextWithBold(str.slice(lastIdx, matchStart));
       }
       const { url: rawUrl, trailing } = stripUnbalancedTrailingPunct(match[0]);
       const safeHref = sanitizeUrl(rawUrl);
       if (safeHref !== '#') {
-        result += `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>${escapeHtml(trailing)}`;
+        result += `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>${renderTextWithBold(trailing)}`;
       } else {
-        result += escapeHtml(match[0]);
+        result += renderTextWithBold(match[0]);
       }
       lastIdx = matchStart + match[0].length;
     }
     if (lastIdx < str.length) {
-      result += escapeHtml(str.slice(lastIdx));
+      result += renderTextWithBold(str.slice(lastIdx));
     }
     return result;
   }
@@ -965,11 +988,13 @@
     }
   }
 
-  function downloadNoteAsTxt(id) {
+  function downloadNoteAsTxt(id, showSingleToast = true) {
     const item = items.find((i) => i.id === id);
-    if (!item) return;
+    if (!item) return false;
     const blob = new Blob([String(item.content || '')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+    const url = (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function')
+      ? URL.createObjectURL(blob)
+      : `data:text/plain;charset=utf-8,${encodeURIComponent(String(item.content || ''))}`;
     const safeTitle = String(item.title || 'ghi-chu').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || 'note';
     const a = document.createElement('a');
     a.href = url;
@@ -977,8 +1002,13 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast(`💾 Đã tải xuống ${safeTitle}.txt`);
+    if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function' && String(url).startsWith('blob:')) {
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    if (showSingleToast) {
+      showToast(`💾 Đã tải xuống ${safeTitle}.txt`);
+    }
+    return true;
   }
 
   async function forceSyncFromCloud() {
@@ -1307,6 +1337,9 @@
       if (batchSelectAllBtn) {
         batchSelectAllBtn.textContent = '☑️ Chọn tất cả';
       }
+      if (batchPinSelectedBtn) {
+        batchPinSelectedBtn.textContent = '📌 Ghim đã chọn';
+      }
       return;
     }
     batchActionBar.style.display = 'flex';
@@ -1318,6 +1351,11 @@
       const list = Array.isArray(visibleItems) ? visibleItems : getFilteredSortedItems();
       const allVisibleSelected = list.length === 0 || list.every((i) => selectedItemIds.has(i.id));
       batchSelectAllBtn.textContent = allVisibleSelected ? '☑️ Bỏ chọn tất cả' : '☑️ Chọn tất cả';
+    }
+    if (batchPinSelectedBtn) {
+      const selectedList = items.filter((i) => selectedItemIds.has(i.id));
+      const allSelectedPinned = selectedList.length > 0 && selectedList.every((i) => Boolean(i.pinned));
+      batchPinSelectedBtn.textContent = allSelectedPinned ? '📍 Bỏ ghim đã chọn' : '📌 Ghim đã chọn';
     }
   }
 
@@ -1365,6 +1403,78 @@
     }).filter(Boolean).join('\n\n');
 
     await copyToClipboard(combinedText, batchCopySelectedBtn, `📋 Đã sao chép ${selectedList.length} mục đã chọn!`);
+  }
+
+  async function batchDownloadSelectedItems() {
+    const selectedList = getSelectedItemsInDisplayOrder();
+    if (selectedList.length === 0) return;
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    let downloadedCount = 0;
+    for (const item of selectedList) {
+      if (item.type === 'file') {
+        const fileName = item.fileName || item.file_name || item.title || 'download';
+        if (isCloud) {
+          await triggerCloudFileDownload(item.id, fileName);
+          downloadedCount++;
+        } else {
+          const a = document.createElement('a');
+          a.href = `/api/files/${encodeURIComponent(item.id)}/download`;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          downloadedCount++;
+        }
+      } else {
+        if (downloadNoteAsTxt(item.id, false)) {
+          downloadedCount++;
+        }
+      }
+    }
+    if (downloadedCount > 0) {
+      showToast(`⬇️ Đã tải xuống ${downloadedCount} mục đã chọn!`);
+    }
+  }
+
+  async function batchPinSelectedItems() {
+    const selectedList = getSelectedItemsInDisplayOrder();
+    if (selectedList.length === 0) return;
+    const allPinned = selectedList.every((i) => Boolean(i.pinned));
+    const targetPinned = !allPinned;
+    const itemsToUpdate = selectedList.filter((i) => Boolean(i.pinned) !== targetPinned);
+    if (batchPinSelectedBtn) batchPinSelectedBtn.disabled = true;
+    let updatedCount = 0;
+    try {
+      for (const item of itemsToUpdate) {
+        const res = await fetch(`/api/items/${encodeURIComponent(item.id)}/pin`, {
+          method: 'POST'
+        });
+        if (res && res.ok) {
+          const data = await res.json();
+          if (data && data.success && data.item) {
+            const idx = items.findIndex((i) => i.id === data.item.id);
+            if (idx >= 0) {
+              items[idx] = data.item;
+            } else {
+              items.unshift(data.item);
+            }
+            updatedCount++;
+          }
+        }
+      }
+      renderItems();
+      if (updatedCount > 0) {
+        showToast(
+          targetPinned
+            ? `📌 Đã ghim ${updatedCount} mục đã chọn!`
+            : `📍 Đã bỏ ghim ${updatedCount} mục đã chọn!`
+        );
+      }
+    } catch (_) {
+      showToast('❌ Không thể thay đổi trạng thái ghim hàng loạt');
+    } finally {
+      if (batchPinSelectedBtn) batchPinSelectedBtn.disabled = false;
+    }
   }
 
   function batchExportSelectedItems() {
@@ -1645,6 +1755,9 @@
     const copyTarget = item.type === 'file' ? downloadUrl : (item.content || '');
     const qrTarget = item.type === 'file' ? previewUrl : (item.content || '');
     const safeLinkHref = item.type === 'link' ? sanitizeUrl(item.content) : '#';
+    const linkDomain = item.type === 'link'
+      ? String(item.domain || extractLinkDefaultTitle(item.content) || '').trim()
+      : '';
     const isPinned = Boolean(item.pinned);
     const isSelected = selectedItemIds.has(item.id);
 
@@ -1655,6 +1768,7 @@
             <input type="checkbox" class="item-select-cb js-select-item-cb" data-id="${escapeHtml(item.id)}" ${isSelected ? 'checked' : ''} title="Chọn mục này để thao tác hàng loạt" aria-label="Chọn mục" />
             ${isPinned ? '<span class="pin-badge">📌 Đã ghim</span>' : ''}
             <span class="type-badge ${badgeClass}">${badgeLabel}</span>
+            ${linkDomain ? `<span class="domain-badge" title="Tên miền liên kết">🌐 ${escapeHtml(linkDomain)}</span>` : ''}
             <span class="time-badge">🕒 ${formatRelativeTime(createdAt)}</span>
             <span class="ttl-badge" title="Thời gian tự động xóa">⏳ ${formatRemainingTtl(expiresAt)}</span>
           </div>
@@ -2105,6 +2219,30 @@
     `).join('');
   }
 
+  function generateRandomRoomSlug() {
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const pick = (len) => {
+      let out = '';
+      if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+        const bytes = new Uint8Array(len);
+        crypto.getRandomValues(bytes);
+        for (let i = 0; i < len; i++) {
+          out += alphabet[bytes[i] % alphabet.length];
+        }
+        return out;
+      }
+      for (let i = 0; i < len; i++) {
+        out += alphabet[Math.floor(Math.random() * alphabet.length)];
+      }
+      return out;
+    };
+    let candidate = `room-${pick(4)}-${pick(4)}`;
+    if (candidate === currentRoom) {
+      candidate = `room-${pick(4)}-${pick(4)}`;
+    }
+    return candidate;
+  }
+
   function switchRoom(newRoom) {
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
     saveComposerDraft(currentRoom);
@@ -2516,6 +2654,16 @@
       return batchCopySelectedItems();
     });
   }
+  if (batchDownloadSelectedBtn) {
+    batchDownloadSelectedBtn.addEventListener('click', () => {
+      return batchDownloadSelectedItems();
+    });
+  }
+  if (batchPinSelectedBtn) {
+    batchPinSelectedBtn.addEventListener('click', () => {
+      return batchPinSelectedItems();
+    });
+  }
   if (batchExportSelectedBtn) {
     batchExportSelectedBtn.addEventListener('click', () => {
       batchExportSelectedItems();
@@ -2720,6 +2868,20 @@
         roomModal.classList.remove('open');
         switchRoom(targetRoom);
       }
+    });
+  }
+
+  if (randomRoomBtn) {
+    randomRoomBtn.addEventListener('click', () => {
+      const randomRoom = generateRandomRoomSlug();
+      if (roomNameInput) {
+        roomNameInput.value = randomRoom;
+      }
+      if (roomModal) {
+        roomModal.classList.remove('open');
+      }
+      switchRoom(randomRoom);
+      showToast(`🎲 Đã tạo & chuyển sang phòng riêng "${randomRoom}"! Hãy quét mã QR hoặc Copy Link Phòng để mời thiết bị khác.`);
     });
   }
 
