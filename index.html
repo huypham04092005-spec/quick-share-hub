@@ -179,6 +179,7 @@
               <option value="7d">7 ngày</option>
               <option value="never">Không giới hạn</option>
             </select>
+            <span id="composerCharCount" class="composer-char-count" aria-live="polite">0 ký tự • 1 dòng</span>
           </div>
 
           <button id="sendItemBtn" type="button" class="btn btn-primary">
@@ -247,18 +248,31 @@
     </div>
   </div>
 
-  <!-- In-App PDF Preview Modal -->
+  <!-- In-App File & PDF Preview Modal -->
   <div id="pdfModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pdfModalTitle">
     <div class="modal-box modal-xl">
       <div class="modal-header">
         <h3 id="pdfModalTitle">📄 Xem trước PDF</h3>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button id="copyModalTextBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;">📋 Copy nội dung</button>
           <a id="pdfModalOpenTab" href="#" target="_blank" rel="noopener" class="btn btn-sm">↗ Mở tab mới</a>
           <a id="pdfModalDownload" href="#" download class="btn btn-sm btn-primary">⬇ Tải xuống PDF</a>
           <button id="closePdfModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
         </div>
       </div>
+      <div id="pdfMobileFallbackBar" class="pdf-mobile-fallback">
+        <span>📱 Nếu trình duyệt di động không hiển thị PDF trực tiếp:</span>
+        <a id="pdfFallbackOpenLink" href="#" target="_blank" rel="noopener" class="note-inline-link">Mở PDF toàn màn hình</a>
+        <span>•</span>
+        <a id="pdfFallbackDownloadLink" href="#" download class="note-inline-link">Tải xuống máy</a>
+      </div>
       <iframe id="pdfViewerFrame" class="pdf-viewer-frame" title="PDF Preview"></iframe>
+      <div id="imagePreviewContainer" class="modal-image-container" style="display: none;">
+        <img id="modalImagePreview" src="" alt="Xem trước ảnh" class="modal-image-preview" />
+      </div>
+      <div id="textPreviewContainer" class="modal-text-container" style="display: none;">
+        <pre id="modalTextPreview" class="modal-text-preview"></pre>
+      </div>
     </div>
   </div>
 

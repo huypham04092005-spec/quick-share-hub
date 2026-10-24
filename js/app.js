@@ -25,6 +25,7 @@
   const ttlSelect = document.getElementById('ttlSelect');
   const sendItemBtn = document.getElementById('sendItemBtn');
   const pasteClipboardBtn = document.getElementById('pasteClipboardBtn');
+  const composerCharCount = document.getElementById('composerCharCount');
 
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
@@ -82,6 +83,16 @@
   const pdfModalOpenTab = document.getElementById('pdfModalOpenTab');
   const pdfModalDownload = document.getElementById('pdfModalDownload');
   const closePdfModalBtn = document.getElementById('closePdfModalBtn');
+  const copyModalTextBtn = document.getElementById('copyModalTextBtn');
+  const pdfMobileFallbackBar = document.getElementById('pdfMobileFallbackBar');
+  const pdfFallbackOpenLink = document.getElementById('pdfFallbackOpenLink');
+  const pdfFallbackDownloadLink = document.getElementById('pdfFallbackDownloadLink');
+  const imagePreviewContainer = document.getElementById('imagePreviewContainer');
+  const modalImagePreview = document.getElementById('modalImagePreview');
+  const textPreviewContainer = document.getElementById('textPreviewContainer');
+  const modalTextPreview = document.getElementById('modalTextPreview');
+  let currentModalTextContent = '';
+  let lastWakeSyncAt = 0;
 
   const editModal = document.getElementById('editModal');
   const editItemTextarea = document.getElementById('editItemTextarea');
@@ -191,6 +202,47 @@
       .replace(/'/g, '&#39;');
   }
 
+  function renderNoteContentWithLinks(rawText) {
+    if (!rawText) return '';
+    const str = String(rawText);
+    const urlRegex = /https?:\/\/[^\s<>"'`]+/gi;
+    let result = '';
+    let lastIdx = 0;
+    let match;
+    while ((match = urlRegex.exec(str)) !== null) {
+      const matchStart = match.index;
+      if (matchStart > lastIdx) {
+        result += escapeHtml(str.slice(lastIdx, matchStart));
+      }
+      let rawUrl = match[0];
+      let trailing = '';
+      const trailMatch = rawUrl.match(/([.,;:!?)\]]+)$/);
+      if (trailMatch) {
+        trailing = trailMatch[1];
+        rawUrl = rawUrl.slice(0, -trailing.length);
+      }
+      const safeHref = sanitizeUrl(rawUrl);
+      if (safeHref !== '#') {
+        result += `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>${escapeHtml(trailing)}`;
+      } else {
+        result += escapeHtml(match[0]);
+      }
+      lastIdx = matchStart + match[0].length;
+    }
+    if (lastIdx < str.length) {
+      result += escapeHtml(str.slice(lastIdx));
+    }
+    return result;
+  }
+
+  function updateComposerCounter() {
+    if (!composerCharCount || !itemInput) return;
+    const val = itemInput.value || '';
+    const chars = val.length;
+    const lines = val ? val.split(/\r?\n/).length : 1;
+    composerCharCount.textContent = `${chars.toLocaleString('vi-VN')} ký tự • ${lines} dòng`;
+  }
+
   async function copyToClipboard(text, buttonEl) {
     try {
       await navigator.clipboard.writeText(text);
@@ -227,9 +279,10 @@
   }
 
   let deepLinkHandled = false;
-  async function fetchItems() {
+  async function fetchItems(forceSync = false) {
     try {
-      const res = await fetch(`/api/items?room=${encodeURIComponent(currentRoom)}`);
+      const syncParam = forceSync ? '&sync=1' : '';
+      const res = await fetch(`/api/items?room=${encodeURIComponent(currentRoom)}${syncParam}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.items)) {
         items = data.items;
@@ -274,6 +327,7 @@
       const data = await res.json();
       if (res.ok && data.success && data.item) {
         itemInput.value = '';
+        updateComposerCounter();
         upsertItemInState(data.item);
         showToast('🚀 Đã chia sẻ thành công!');
       } else {
@@ -619,14 +673,21 @@
   }
 
   function renderSingleCard(item) {
-    const isPdf = Boolean(item.isPdf || item.is_pdf);
+    const fileName = item.fileName || item.file_name || item.title || 'file';
+    const lowerName = String(fileName).toLowerCase();
+    const isPdf = Boolean(item.isPdf || item.is_pdf || lowerName.endsWith('.pdf'));
     const mime = item.mimeType || item.mime_type || '';
-    const isImage = item.type === 'file' && mime.startsWith('image/');
-    const isTextPreviewable = item.type === 'file' && (mime.startsWith('text/') || mime.includes('json'));
+    const isImage = item.type === 'file' && (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isTextPreviewable = item.type === 'file' && !isPdf && !isImage && (
+      mime.startsWith('text/') ||
+      mime.includes('json') ||
+      mime.includes('xml') ||
+      mime.includes('javascript') ||
+      /\.(txt|md|json|csv|tsv|log|js|ts|py|html|css|xml|ya?ml|ini|sh|bat|sql)$/i.test(lowerName)
+    );
     const canPreviewModal = isPdf || isImage || isTextPreviewable;
     const createdAt = item.createdAt || item.created_at;
     const expiresAt = item.expiresAt || item.expires_at;
-    const fileName = item.fileName || item.file_name || item.title || 'file';
     const fileSize = item.fileSize ?? item.file_size;
 
     let badgeClass = item.type;
@@ -661,7 +722,7 @@
     } else if (item.type === 'note') {
       bodyHtml = `
         <div class="item-body">
-          <pre class="item-note-pre">${escapeHtml(item.content)}</pre>
+          <pre class="item-note-pre">${renderNoteContentWithLinks(item.content)}</pre>
         </div>
       `;
     } else if (item.type === 'file') {
@@ -734,6 +795,10 @@
             📱 Mã QR
           </button>
 
+          <button type="button" class="btn btn-sm js-share-btn" data-id="${escapeHtml(item.id)}" title="Chia sẻ nhanh qua ứng dụng khác (Zalo, Telegram, AirDrop, Messenger...)">
+            📤 Chia sẻ
+          </button>
+
           ${item.type !== 'file' ? `
             <button type="button" class="btn btn-sm js-edit-btn" data-id="${escapeHtml(item.id)}" title="Chỉnh sửa nội dung mục này">
               ✏️ Sửa
@@ -750,6 +815,53 @@
         </div>
       </article>
     `;
+  }
+
+  async function shareItem(id) {
+    const item = items.find((i) => i.id === id);
+    if (!item) return;
+
+    const shareOrigin = getShareOrigin();
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    let shareData = {};
+    let fallbackCopy = '';
+
+    if (item.type === 'link') {
+      shareData = {
+        title: item.title || 'Quick Share Hub — Link',
+        text: item.title || '',
+        url: item.content
+      };
+      fallbackCopy = item.content || '';
+    } else if (item.type === 'note') {
+      shareData = {
+        title: item.title || 'Quick Share Hub — Ghi chú',
+        text: item.content || ''
+      };
+      fallbackCopy = item.content || '';
+    } else if (item.type === 'file') {
+      const fName = item.fileName || item.file_name || item.title || 'file';
+      const fileUrl = isCloud
+        ? `${shareOrigin}/?room=${encodeURIComponent(currentRoom)}&preview=${encodeURIComponent(item.id)}`
+        : `${shareOrigin}/api/files/${encodeURIComponent(item.id)}/download`;
+      shareData = {
+        title: fName,
+        text: `📄 ${fName}`,
+        url: fileUrl
+      };
+      fallbackCopy = fileUrl;
+    }
+
+    if (navigator.share && typeof navigator.share === 'function') {
+      try {
+        await navigator.share(shareData);
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      }
+    }
+    await copyToClipboard(fallbackCopy, null);
+    showToast('📤 Đã sao chép nội dung để chia sẻ!');
   }
 
   // QR Modal
@@ -771,31 +883,123 @@
     }
   }
 
-  // PDF Preview Modal & Cloud File Download
+  // Multi-Format File & PDF Preview Modal
+  function closePdfPreviewModal() {
+    if (!pdfModal) return;
+    pdfModal.classList.remove('open');
+    if (pdfViewerFrame) pdfViewerFrame.src = 'about:blank';
+    if (modalImagePreview) modalImagePreview.src = '';
+    if (modalTextPreview) modalTextPreview.textContent = '';
+    currentModalTextContent = '';
+  }
+
+  function closeAllModals() {
+    if (qrModal) qrModal.classList.remove('open');
+    closePdfPreviewModal();
+    if (roomModal) roomModal.classList.remove('open');
+    if (editModal) {
+      editModal.classList.remove('open');
+      editingItemId = null;
+    }
+  }
+
   async function openPdfPreviewModal(id, fileName) {
-    if (window.QSHCloud && window.QSHCloud.isCloudMode()) {
+    const item = items.find((i) => i.id === id);
+    const resolvedName = fileName || (item && (item.fileName || item.file_name || item.title)) || 'document.pdf';
+    const lowerName = String(resolvedName).toLowerCase();
+    const mime = (item && (item.mimeType || item.mime_type)) || '';
+    const isPdf = Boolean((item && (item.isPdf || item.is_pdf)) || mime === 'application/pdf' || lowerName.endsWith('.pdf'));
+    const isImage = !isPdf && Boolean(mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isText = !isPdf && !isImage && Boolean(
+      mime.startsWith('text/') ||
+      mime.includes('json') ||
+      mime.includes('xml') ||
+      mime.includes('javascript') ||
+      /\.(txt|md|json|csv|tsv|log|js|ts|py|html|css|xml|ya?ml|ini|sh|bat|sql)$/i.test(lowerName)
+    );
+
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    let previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
+    let downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
+
+    if (isCloud) {
       const blobUrl = await window.QSHCloud.getBlobUrlForFile(id);
-      if (blobUrl) {
-        pdfModalTitle.textContent = `📄 ${fileName || 'Xem trước tài liệu'}`;
-        pdfModal.classList.add('open');
-        pdfViewerFrame.src = blobUrl;
-        pdfModalOpenTab.href = blobUrl;
-        pdfModalDownload.href = blobUrl;
-        pdfModalDownload.setAttribute('download', fileName || 'document.pdf');
+      if (!blobUrl) {
+        showToast('⚠️ File này vượt giới hạn lưu trữ Cloud Gist (25MB) hoặc đã bị xóa khỏi bộ nhớ đám mây.');
         return;
       }
-      showToast('⚠️ File này vượt giới hạn lưu trữ Cloud Gist (25MB) hoặc đã bị xóa khỏi bộ nhớ đám mây.');
+      previewUrl = blobUrl;
+      downloadUrl = blobUrl;
+    }
+
+    pdfModalOpenTab.href = previewUrl;
+    pdfModalDownload.href = downloadUrl;
+    pdfModalDownload.setAttribute('download', resolvedName);
+    pdfModalDownload.textContent = isPdf ? '⬇ Tải xuống PDF' : '⬇ Tải xuống';
+    if (pdfFallbackOpenLink) pdfFallbackOpenLink.href = previewUrl;
+    if (pdfFallbackDownloadLink) {
+      pdfFallbackDownloadLink.href = downloadUrl;
+      pdfFallbackDownloadLink.setAttribute('download', resolvedName);
+    }
+
+    if (isImage) {
+      pdfModalTitle.textContent = `🖼️ ${resolvedName}`;
+      if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
+      if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
+      pdfViewerFrame.style.display = 'none';
+      pdfViewerFrame.src = 'about:blank';
+      if (textPreviewContainer) textPreviewContainer.style.display = 'none';
+      if (imagePreviewContainer && modalImagePreview) {
+        modalImagePreview.src = previewUrl;
+        modalImagePreview.alt = resolvedName;
+        imagePreviewContainer.style.display = 'flex';
+      }
+      pdfModal.classList.add('open');
       return;
     }
 
-    pdfModalTitle.textContent = `📄 ${fileName || 'Xem trước PDF'}`;
-    pdfModal.classList.add('open');
-    const previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
-    const downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
+    if (isText) {
+      pdfModalTitle.textContent = `📝 ${resolvedName}`;
+      if (copyModalTextBtn) copyModalTextBtn.style.display = 'inline-flex';
+      if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
+      pdfViewerFrame.style.display = 'none';
+      pdfViewerFrame.src = 'about:blank';
+      if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+      if (textPreviewContainer && modalTextPreview) {
+        modalTextPreview.textContent = 'Đang tải nội dung...';
+        textPreviewContainer.style.display = 'flex';
+      }
+      pdfModal.classList.add('open');
+
+      try {
+        let rawText = null;
+        if (isCloud && typeof window.QSHCloud.getTextForFile === 'function') {
+          rawText = await window.QSHCloud.getTextForFile(id);
+        } else {
+          const res = await fetch(`/api/files/${encodeURIComponent(id)}/preview`);
+          if (res.ok) rawText = await res.text();
+        }
+        currentModalTextContent = rawText !== null ? rawText : '';
+        if (modalTextPreview) {
+          modalTextPreview.textContent = currentModalTextContent || '(File trống)';
+        }
+      } catch (_) {
+        if (modalTextPreview) {
+          modalTextPreview.textContent = 'Không thể đọc nội dung văn bản của file này.';
+        }
+      }
+      return;
+    }
+
+    // Default: PDF / Document iframe preview
+    pdfModalTitle.textContent = `📄 ${resolvedName}`;
+    if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
+    if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+    if (textPreviewContainer) textPreviewContainer.style.display = 'none';
+    if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'flex';
+    pdfViewerFrame.style.display = 'block';
     pdfViewerFrame.src = previewUrl;
-    pdfModalOpenTab.href = previewUrl;
-    pdfModalDownload.href = downloadUrl;
-    pdfModalDownload.setAttribute('download', fileName || 'document.pdf');
+    pdfModal.classList.add('open');
   }
 
   async function triggerCloudFileDownload(id, fileName) {
@@ -899,12 +1103,16 @@
       url.searchParams.set('room', currentRoom);
     }
     window.history.pushState({}, '', url.toString());
-    fetchItems();
+    fetchItems(true);
   }
 
   // Event Listeners
   sendItemBtn.addEventListener('click', () => {
     createTextItem(itemInput.value, ttlSelect.value);
+  });
+
+  itemInput.addEventListener('input', () => {
+    updateComposerCounter();
   });
 
   itemInput.addEventListener('keydown', (e) => {
@@ -919,6 +1127,7 @@
       const text = await navigator.clipboard.readText();
       if (text && text.trim()) {
         itemInput.value = text;
+        updateComposerCounter();
         await createTextItem(text, ttlSelect.value);
       } else {
         showToast('⚠️ Clipboard đang trống hoặc chứa dữ liệu không phải văn bản');
@@ -951,6 +1160,7 @@
       if (pastedText && pastedText.trim()) {
         e.preventDefault();
         itemInput.value = pastedText;
+        updateComposerCounter();
         createTextItem(pastedText, ttlSelect.value);
       }
     }
@@ -1004,6 +1214,12 @@
     const qrBtn = e.target.closest('.js-qr-btn');
     if (qrBtn) {
       openQrModal(qrBtn.getAttribute('data-qr'), qrBtn.getAttribute('data-title'));
+      return;
+    }
+
+    const shareBtn = e.target.closest('.js-share-btn');
+    if (shareBtn) {
+      shareItem(shareBtn.getAttribute('data-id'));
       return;
     }
 
@@ -1151,9 +1367,14 @@
   closeQrModalBtn.addEventListener('click', () => qrModal.classList.remove('open'));
   copyQrTextBtn.addEventListener('click', () => copyToClipboard(currentQrText, copyQrTextBtn));
 
+  if (copyModalTextBtn) {
+    copyModalTextBtn.addEventListener('click', () => {
+      copyToClipboard(currentModalTextContent, copyModalTextBtn);
+    });
+  }
+
   closePdfModalBtn.addEventListener('click', () => {
-    pdfModal.classList.remove('open');
-    pdfViewerFrame.src = 'about:blank';
+    closePdfPreviewModal();
   });
 
   roomSwitchBtn.addEventListener('click', () => {
@@ -1178,16 +1399,40 @@
     }
   });
 
-  // Close modals on backdrop click
+  // Close modals on backdrop click or Escape key
   [qrModal, pdfModal, roomModal, editModal].filter(Boolean).forEach((modal) => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) {
-        modal.classList.remove('open');
-        if (modal === pdfModal) pdfViewerFrame.src = 'about:blank';
-        if (modal === editModal) editingItemId = null;
+        if (modal === pdfModal) {
+          closePdfPreviewModal();
+        } else {
+          modal.classList.remove('open');
+          if (modal === editModal) editingItemId = null;
+        }
       }
     });
   });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeAllModals();
+    }
+  });
+
+  // Auto-sync from 24/7 Cloud Gist on mobile/desktop wake-up or tab focus
+  function handleAppWakeOrFocus() {
+    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    const now = Date.now();
+    if (now - lastWakeSyncAt < 3500) return;
+    lastWakeSyncAt = now;
+    fetchItems(true);
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      connectWebSocket();
+    }
+  }
+
+  document.addEventListener('visibilitychange', handleAppWakeOrFocus);
+  window.addEventListener('focus', handleAppWakeOrFocus);
 
   // Periodic UI countdown & heartbeat
   setInterval(() => {
@@ -1206,7 +1451,9 @@
 
   // Initialize
   currentRoomBadge.textContent = currentRoom;
+  updateComposerCounter();
   fetchPublicOrigin();
   fetchItems();
   connectWebSocket();
 })();
+

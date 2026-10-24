@@ -466,6 +466,7 @@
   const cloudState = {
     initialized: false,
     initPromise: null,
+    lastFetchedAt: 0,
     rooms: new Map(), // room -> Array<Item>
     files: new Map(), // itemId -> { bytes: Uint8Array, mimeType, fileName, isPdf, blobUrl }
     deletedIds: new Set(),
@@ -525,7 +526,9 @@
       if (existingRemote) {
         const localTs = Number(item.updatedAt ?? item.createdAt ?? 0);
         const remoteTs = Number(existingRemote.updatedAt ?? existingRemote.createdAt ?? 0);
-        if (localTs >= remoteTs) {
+        if (localTs > remoteTs) {
+          byId.set(item.id, item);
+        } else if (localTs === remoteTs && item.fileGistId && !existingRemote.fileGistId) {
           byId.set(item.id, item);
         }
       } else {
@@ -545,7 +548,10 @@
 
   async function fetchCloudGistState(force = false) {
     if (cloudState.initialized && !force) return;
-    if (cloudState.initPromise && !force) return cloudState.initPromise;
+    if (cloudState.initPromise) {
+      if (!force) return cloudState.initPromise;
+      try { await cloudState.initPromise; } catch (_) {}
+    }
 
     cloudState.initPromise = (async () => {
       const t0 = Date.now();
@@ -565,7 +571,7 @@
               if (fname.startsWith('room_') && fname.endsWith('.json') && fileObj.content) {
                 try {
                   const parsed = JSON.parse(fileObj.content);
-                  const rName = parsed.room || fname.slice(5, -5);
+                  const rName = normalizeRoom(parsed.room || fname.slice(5, -5));
                   ingestRemoteRoomMeta(rName, parsed);
                   if (Array.isArray(parsed.items)) {
                     const existingLocal = cloudState.rooms.get(rName) || [];
@@ -575,6 +581,7 @@
               }
             }
           }
+          cloudState.lastFetchedAt = Date.now();
         }
       } catch (_) {}
       cloudState.initialized = true;
@@ -595,6 +602,10 @@
   }
 
   function flushDirtyRoomsToGist() {
+    if (cloudState.syncTimer) {
+      clearTimeout(cloudState.syncTimer);
+      cloudState.syncTimer = null;
+    }
     if (cloudState.dirtyRooms.size === 0) return cloudState.syncQueue;
     const roomsToFlush = Array.from(cloudState.dirtyRooms);
     cloudState.dirtyRooms.clear();
@@ -614,6 +625,7 @@
         if (getRes.ok) {
           const gData = await getRes.json();
           remoteGistFiles = (gData && gData.files) || {};
+          cloudState.lastFetchedAt = Date.now();
         }
 
         const filesPayload = {};
@@ -1150,6 +1162,7 @@
           if (item.expiresAt !== null && item.expiresAt !== undefined && item.expiresAt <= now) {
             expiredIds.push(item.id);
             roomExpired.push(item.id);
+            cloudState.deletedIds.add(item.id);
             cloudState.files.delete(item.id);
             if (item.fileGistId) deleteCloudFileGist(item.fileGistId);
           } else {
@@ -1204,7 +1217,12 @@
     if (apiPath === '/api/items') {
       if (upperMethod === 'GET') {
         const room = normalizeRoom(urlObj.searchParams.get('room'));
-        if (urlObj.searchParams.get('sync') === '1') {
+        const forceSync = urlObj.searchParams.get('sync') === '1';
+        const isStalePersistent = isPersistentRoom(room) && (Date.now() - cloudState.lastFetchedAt > 3000);
+        if (forceSync || isStalePersistent) {
+          if (cloudState.dirtyRooms.size > 0) {
+            await flushDirtyRoomsToGist();
+          }
           await fetchCloudGistState(true);
         }
         const now = Date.now();
@@ -1294,7 +1312,11 @@
     const itemPinMatch = apiPath.match(/^\/api\/items\/([^/]+)\/pin$/);
     if (itemPinMatch && upperMethod === 'POST') {
       const id = decodeURIComponent(itemPinMatch[1]);
-      const found = findItemAcrossRooms(id, false);
+      let found = findItemAcrossRooms(id, false);
+      if (!found && !cloudState.deletedIds.has(id)) {
+        await fetchCloudGistState(true);
+        found = findItemAcrossRooms(id, false);
+      }
       if (!found) {
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
@@ -1311,7 +1333,11 @@
     const itemSingleMatch = apiPath.match(/^\/api\/items\/([^/]+)$/);
     if (itemSingleMatch && upperMethod === 'PUT') {
       const id = decodeURIComponent(itemSingleMatch[1]);
-      const found = findItemAcrossRooms(id, false);
+      let found = findItemAcrossRooms(id, false);
+      if (!found && !cloudState.deletedIds.has(id)) {
+        await fetchCloudGistState(true);
+        found = findItemAcrossRooms(id, false);
+      }
       if (!found) {
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
@@ -1357,7 +1383,11 @@
     const itemDeleteMatch = apiPath.match(/^\/api\/items\/([^/]+)$/);
     if (itemDeleteMatch && upperMethod === 'DELETE') {
       const id = decodeURIComponent(itemDeleteMatch[1]);
-      const found = findItemAcrossRooms(id, true);
+      let found = findItemAcrossRooms(id, true);
+      if (!found && !cloudState.deletedIds.has(id)) {
+        await fetchCloudGistState(true);
+        found = findItemAcrossRooms(id, true);
+      }
       if (!found) {
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
@@ -1458,7 +1488,12 @@
       const id = decodeURIComponent(fileRouteMatch[1]);
       const mode = fileRouteMatch[2] || 'preview';
 
-      const found = findItemAcrossRooms(id, false);
+      let found = findItemAcrossRooms(id, false);
+      const hasValidGistRef = (f) => f && f.item && /^[a-f0-9]{20,40}$/i.test(String(f.item.fileGistId || f.item.filePath || ''));
+      if (!cloudState.deletedIds.has(id) && (!found || (!cloudState.files.has(id) && !hasValidGistRef(found)))) {
+        await fetchCloudGistState(true);
+        found = findItemAcrossRooms(id, false);
+      }
       if (!found || found.item.type !== 'file') {
         return makeJsonResponse({
           success: false,
@@ -1838,10 +1873,15 @@
     global.WebSocket = WrappedWebSocket;
   }
 
-  // Helper API for Browser UI (Blob URL resolution for PDF iframe & File Download)
-  async function getBlobUrlForFile(id) {
+  // Helper API for Browser UI (Blob URL & Text resolution for Preview Modal & File Download)
+  async function resolveCloudFileEntry(id) {
     await fetchCloudGistState(false);
-    const found = findItemAcrossRooms(id, false);
+    let found = findItemAcrossRooms(id, false);
+    const hasValidGistRef = (f) => f && f.item && /^[a-f0-9]{20,40}$/i.test(String(f.item.fileGistId || f.item.filePath || ''));
+    if (!cloudState.deletedIds.has(id) && (!found || (!cloudState.files.has(id) && !hasValidGistRef(found)))) {
+      await fetchCloudGistState(true);
+      found = findItemAcrossRooms(id, false);
+    }
     let fileEntry = cloudState.files.get(id);
     if (!fileEntry && found && (found.item.fileGistId || found.item.filePath)) {
       fileEntry = await fetchBinaryFileFromCloudGist(found.item.fileGistId || found.item.filePath);
@@ -1850,6 +1890,11 @@
         recordTraffic({ downloadBytes: fileEntry.bytes ? fileEntry.bytes.byteLength : 0 });
       }
     }
+    return fileEntry && fileEntry.bytes ? fileEntry : null;
+  }
+
+  async function getBlobUrlForFile(id) {
+    const fileEntry = await resolveCloudFileEntry(id);
     if (!fileEntry || !fileEntry.bytes) return null;
     if (!fileEntry.blobUrl && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
       const mime = fileEntry.isPdf ? 'application/pdf' : (fileEntry.mimeType || 'application/octet-stream');
@@ -1859,13 +1904,38 @@
     return fileEntry.blobUrl;
   }
 
+  async function getTextForFile(id) {
+    const fileEntry = await resolveCloudFileEntry(id);
+    if (!fileEntry || !fileEntry.bytes) return null;
+    try {
+      return new TextDecoder('utf-8').decode(fileEntry.bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function getCloudStateInfo() {
+    return {
+      initialized: cloudState.initialized,
+      lastFetchedAt: cloudState.lastFetchedAt,
+      dirtyRoomsCount: cloudState.dirtyRooms.size
+    };
+  }
+
+  function expireGistCache() {
+    cloudState.lastFetchedAt = 0;
+  }
+
   global.QSHCloud = {
     CLOUD_PUBLIC_URL,
     DB_GIST_ID,
     isCloudMode: isCloudHost,
     getBlobUrlForFile,
+    getTextForFile,
     flushDirtyRoomsToGist,
     fetchCloudGistState,
+    getCloudStateInfo,
+    expireGistCache,
     getTelemetrySnapshot,
     recordTraffic,
     resetTelemetry
@@ -1875,4 +1945,3 @@
     module.exports = global.QSHCloud;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
-

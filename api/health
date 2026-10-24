@@ -2,8 +2,13 @@
   "status": "ok",
   "mode": "cloud-24-7",
   "provider": "github-pages-cloud",
-  "timestamp": "2026-10-24T16:25:00.000Z",
+  "timestamp": "2026-10-25T00:00:00.000Z",
   "uptime": 86400,
   "version": "1.0.0",
-  "publicUrl": "https://huypham04092005-spec.github.io/quick-share-hub"
+  "publicUrl": "https://huypham04092005-spec.github.io/quick-share-hub",
+  "stats": {
+    "total": 1,
+    "active": 1,
+    "expired": 0
+  }
 }
