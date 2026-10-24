@@ -1964,6 +1964,7 @@
     expandedNoteIds.clear();
     selectedItemIds.clear();
     lastClickedCheckboxId = null;
+    updateBatchActionBar();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: 'leave', room: currentRoom }));
       ws.send(JSON.stringify({ action: 'join', room: clean }));
