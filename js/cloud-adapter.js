@@ -1477,7 +1477,7 @@
       return makeJsonResponse({ success: false, error: 'Method not allowed' }, 405);
     }
 
-    // 5b. POST /api/items/:id/pin (Toggle Pin Item)
+    // 5b. POST /api/items/:id/pin (Toggle or Set Pin Item)
     const itemPinMatch = apiPath.match(/^\/api\/items\/([^/]+)\/pin$/);
     if (itemPinMatch && upperMethod === 'POST') {
       const id = decodeURIComponent(itemPinMatch[1]);
@@ -1489,8 +1489,18 @@
       if (!found) {
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
+      let pinBody = {};
+      try {
+        if (typeof init.body === 'string' && init.body.trim()) {
+          pinBody = JSON.parse(init.body);
+        } else if (init.body && typeof init.body === 'object') {
+          pinBody = init.body;
+        }
+      } catch (_) {}
       const now = Date.now();
-      found.item.pinned = !found.item.pinned;
+      found.item.pinned = (pinBody && typeof pinBody.pinned === 'boolean')
+        ? pinBody.pinned
+        : !found.item.pinned;
       found.item.updatedAt = now;
       found.item.updated_at = now;
       scheduleRoomGistFlush(found.room);

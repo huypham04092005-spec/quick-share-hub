@@ -284,7 +284,10 @@
     let trailing = '';
     while (url.length > 0) {
       const lastChar = url[url.length - 1];
-      if (/[.,;:!?]/.test(lastChar)) {
+      if (url.endsWith('**')) {
+        trailing = '**' + trailing;
+        url = url.slice(0, -2);
+      } else if (/[.,;:!?]/.test(lastChar)) {
         trailing = lastChar + trailing;
         url = url.slice(0, -1);
       } else if (lastChar === ')') {
@@ -312,7 +315,30 @@
     return { url, trailing };
   }
 
-  function renderTextWithBold(textSlice) {
+  function escapeTextAndRestoreUrls(rawSlice, urlHtmlList) {
+    if (!rawSlice) return '';
+    if (!Array.isArray(urlHtmlList) || urlHtmlList.length === 0) {
+      return escapeHtml(rawSlice);
+    }
+    const tokenRegex = /\x00QSHURL_(\d+)_\x00/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = tokenRegex.exec(rawSlice)) !== null) {
+      if (m.index > last) {
+        out += escapeHtml(rawSlice.slice(last, m.index));
+      }
+      const idx = Number(m[1]);
+      out += (Number.isInteger(idx) && urlHtmlList[idx]) ? urlHtmlList[idx] : '';
+      last = m.index + m[0].length;
+    }
+    if (last < rawSlice.length) {
+      out += escapeHtml(rawSlice.slice(last));
+    }
+    return out;
+  }
+
+  function renderTextWithBold(textSlice, urlHtmlList = []) {
     if (!textSlice) return '';
     const str = String(textSlice);
     const boldRegex = /\*\*(?!\s)((?:(?!\*\*)[^\r\n])+?)(?<!\s)\*\*/g;
@@ -321,42 +347,47 @@
     let m;
     while ((m = boldRegex.exec(str)) !== null) {
       if (m.index > last) {
-        out += escapeHtml(str.slice(last, m.index));
+        out += escapeTextAndRestoreUrls(str.slice(last, m.index), urlHtmlList);
       }
-      out += `<strong>${escapeHtml(m[1])}</strong>`;
+      out += `<strong>${escapeTextAndRestoreUrls(m[1], urlHtmlList)}</strong>`;
       last = m.index + m[0].length;
     }
     if (last < str.length) {
-      out += escapeHtml(str.slice(last));
+      out += escapeTextAndRestoreUrls(str.slice(last), urlHtmlList);
     }
     return out;
   }
 
   function renderPlainTextWithLinks(textSegment) {
     if (!textSegment) return '';
-    const str = String(textSegment);
+    const str = String(textSegment).replace(/\x00/g, '');
     const urlRegex = /https?:\/\/[^\s<>"'`]+/gi;
-    let result = '';
+    const urlHtmlList = [];
+    let tokenized = '';
     let lastIdx = 0;
     let match;
     while ((match = urlRegex.exec(str)) !== null) {
       const matchStart = match.index;
       if (matchStart > lastIdx) {
-        result += renderTextWithBold(str.slice(lastIdx, matchStart));
+        tokenized += str.slice(lastIdx, matchStart);
       }
       const { url: rawUrl, trailing } = stripUnbalancedTrailingPunct(match[0]);
       const safeHref = sanitizeUrl(rawUrl);
       if (safeHref !== '#') {
-        result += `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>${renderTextWithBold(trailing)}`;
+        const urlIdx = urlHtmlList.length;
+        urlHtmlList.push(
+          `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>`
+        );
+        tokenized += `\x00QSHURL_${urlIdx}_\x00${trailing}`;
       } else {
-        result += renderTextWithBold(match[0]);
+        tokenized += match[0];
       }
       lastIdx = matchStart + match[0].length;
     }
     if (lastIdx < str.length) {
-      result += renderTextWithBold(str.slice(lastIdx));
+      tokenized += str.slice(lastIdx);
     }
-    return result;
+    return renderTextWithBold(tokenized, urlHtmlList);
   }
 
   function renderInlineCodeAndLinks(lineText) {
@@ -1414,8 +1445,9 @@
       if (item.type === 'file') {
         const fileName = item.fileName || item.file_name || item.title || 'download';
         if (isCloud) {
-          await triggerCloudFileDownload(item.id, fileName);
-          downloadedCount++;
+          if (await triggerCloudFileDownload(item.id, fileName)) {
+            downloadedCount++;
+          }
         } else {
           const a = document.createElement('a');
           a.href = `/api/files/${encodeURIComponent(item.id)}/download`;
@@ -1444,22 +1476,35 @@
     const itemsToUpdate = selectedList.filter((i) => Boolean(i.pinned) !== targetPinned);
     if (batchPinSelectedBtn) batchPinSelectedBtn.disabled = true;
     let updatedCount = 0;
+    let hadError = false;
     try {
       for (const item of itemsToUpdate) {
-        const res = await fetch(`/api/items/${encodeURIComponent(item.id)}/pin`, {
-          method: 'POST'
-        });
-        if (res && res.ok) {
-          const data = await res.json();
-          if (data && data.success && data.item) {
-            const idx = items.findIndex((i) => i.id === data.item.id);
-            if (idx >= 0) {
-              items[idx] = data.item;
-            } else {
-              items.unshift(data.item);
+        try {
+          const res = await fetch(`/api/items/${encodeURIComponent(item.id)}/pin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pinned: targetPinned })
+          });
+          if (res && res.ok) {
+            const data = await res.json();
+            if (data && data.success && data.item) {
+              const idx = items.findIndex((i) => i.id === data.item.id);
+              if (idx >= 0) {
+                items[idx] = data.item;
+              } else {
+                items.unshift(data.item);
+              }
+              updatedCount++;
             }
-            updatedCount++;
+          } else if (res && res.status === 404) {
+            items = items.filter((i) => i.id !== item.id);
+            expandedNoteIds.delete(item.id);
+            selectedItemIds.delete(item.id);
+          } else {
+            hadError = true;
           }
+        } catch (_) {
+          hadError = true;
         }
       }
       renderItems();
@@ -1469,9 +1514,9 @@
             ? `📌 Đã ghim ${updatedCount} mục đã chọn!`
             : `📍 Đã bỏ ghim ${updatedCount} mục đã chọn!`
         );
+      } else if (hadError) {
+        showToast('❌ Không thể thay đổi trạng thái ghim hàng loạt');
       }
-    } catch (_) {
-      showToast('❌ Không thể thay đổi trạng thái ghim hàng loạt');
     } finally {
       if (batchPinSelectedBtn) batchPinSelectedBtn.disabled = false;
     }
@@ -2096,10 +2141,11 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
-        return;
+        return true;
       }
       showToast('⚠️ Không thể tải file: dữ liệu nhị phân không còn trên Cloud Gist.');
     }
+    return false;
   }
 
   // WebSocket Real-Time Engine
