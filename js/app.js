@@ -28,6 +28,7 @@
   const currentRoomBadge = document.getElementById('currentRoomBadge');
   const roomSwitchBtn = document.getElementById('roomSwitchBtn');
   const themeToggleBtn = document.getElementById('themeToggleBtn');
+  const shortcutsBtn = document.getElementById('shortcutsBtn');
   const roomQrBtn = document.getElementById('roomQrBtn');
   const clearRoomBtn = document.getElementById('clearRoomBtn');
 
@@ -100,6 +101,7 @@
   const closeQrModalBtn = document.getElementById('closeQrModalBtn');
   const copyQrTextBtn = document.getElementById('copyQrTextBtn');
   const downloadQrImgBtn = document.getElementById('downloadQrImgBtn');
+  const shareQrImgBtn = document.getElementById('shareQrImgBtn');
 
   const pdfModal = document.getElementById('pdfModal');
   const pdfModalTitle = document.getElementById('pdfModalTitle');
@@ -138,6 +140,9 @@
   const copyRoomLinkBtn = document.getElementById('copyRoomLinkBtn');
   const resetDefaultRoomBtn = document.getElementById('resetDefaultRoomBtn');
   const confirmRoomBtn = document.getElementById('confirmRoomBtn');
+
+  const shortcutsModal = document.getElementById('shortcutsModal');
+  const closeShortcutsModalBtn = document.getElementById('closeShortcutsModalBtn');
 
   const toastContainer = document.getElementById('toastContainer');
 
@@ -2001,6 +2006,94 @@
     showToast('💾 Đã tải xuống ảnh mã QR (.png)!');
   }
 
+  function dataUrlToPngBlob(dataUrl) {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx < 0) return null;
+    const meta = dataUrl.slice(0, commaIdx);
+    const rawData = dataUrl.slice(commaIdx + 1);
+    const mimeMatch = meta.match(/^data:([^;]+)/i);
+    const mime = (mimeMatch && mimeMatch[1]) ? mimeMatch[1] : 'image/png';
+    try {
+      if (/;base64/i.test(meta)) {
+        let bytes = null;
+        if (typeof atob === 'function') {
+          const binStr = atob(rawData);
+          bytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) {
+            bytes[i] = binStr.charCodeAt(i);
+          }
+        } else if (typeof Buffer !== 'undefined') {
+          bytes = new Uint8Array(Buffer.from(rawData, 'base64'));
+        }
+        if (bytes) {
+          return new Blob([bytes], { type: mime });
+        }
+      } else {
+        return new Blob([decodeURIComponent(rawData)], { type: mime });
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  async function shareQrCodeImage() {
+    const srcUrl = currentQrDataUrl || (qrImage && qrImage.src) || '';
+    const qrTitle = currentQrTitle || 'Quick Share Hub — Mã QR';
+    const qrText = currentQrText || '';
+    const rawLabel = currentQrTitle
+      ? `${currentRoom || 'default'}-${currentQrTitle}`
+      : (currentRoom || 'default');
+    const safeSlug = String(rawLabel)
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48) || 'default';
+    const fileName = `qr-quick-share-${safeSlug}.png`;
+
+    if (srcUrl && srcUrl !== TRANSPARENT_PIXEL && String(srcUrl).startsWith('data:image/')) {
+      if (navigator.share && typeof navigator.canShare === 'function') {
+        try {
+          const blob = dataUrlToPngBlob(srcUrl);
+          if (blob) {
+            const qrFile = typeof File === 'function'
+              ? new File([blob], fileName, { type: 'image/png' })
+              : Object.assign(blob, { name: fileName, type: 'image/png' });
+            if (navigator.canShare({ files: [qrFile] })) {
+              await navigator.share({
+                files: [qrFile],
+                title: qrTitle,
+                text: qrText
+              });
+              showToast('📤 Đã chia sẻ ảnh mã QR!');
+              return;
+            }
+          }
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+        }
+      }
+    }
+
+    if (navigator.share && typeof navigator.share === 'function' && qrText) {
+      try {
+        await navigator.share({
+          title: qrTitle,
+          text: qrText,
+          url: qrText
+        });
+        showToast('📤 Đã mở bảng chia sẻ mã QR!');
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+      }
+    }
+
+    if (qrText) {
+      await copyToClipboard(qrText, shareQrImgBtn, '📤 Đã sao chép nội dung mã QR để chia sẻ!');
+    } else {
+      showToast('⚠️ Mã QR chưa sẵn sàng để chia sẻ');
+    }
+  }
+
   // Multi-Format File & PDF Preview Modal
   function closePdfPreviewModal() {
     if (!pdfModal) return;
@@ -2018,6 +2111,7 @@
     if (qrModal) qrModal.classList.remove('open');
     closePdfPreviewModal();
     if (roomModal) roomModal.classList.remove('open');
+    if (shortcutsModal) shortcutsModal.classList.remove('open');
     if (editModal) {
       editModal.classList.remove('open');
       editingItemId = null;
@@ -2775,6 +2869,18 @@
     });
   }
 
+  if (shortcutsBtn && shortcutsModal) {
+    shortcutsBtn.addEventListener('click', () => {
+      shortcutsModal.classList.add('open');
+    });
+  }
+
+  if (closeShortcutsModalBtn && shortcutsModal) {
+    closeShortcutsModalBtn.addEventListener('click', () => {
+      shortcutsModal.classList.remove('open');
+    });
+  }
+
   if (telemetryToggleBtn && telemetryDashboard) {
     telemetryToggleBtn.addEventListener('click', () => {
       telemetryDashboard.classList.toggle('collapsed');
@@ -2878,6 +2984,11 @@
       downloadQrCodePng();
     });
   }
+  if (shareQrImgBtn) {
+    shareQrImgBtn.addEventListener('click', () => {
+      return shareQrCodeImage();
+    });
+  }
 
   if (copyModalImageBtn) {
     copyModalImageBtn.addEventListener('click', () => {
@@ -2961,7 +3072,7 @@
   });
 
   // Close modals on backdrop click or Escape key
-  [qrModal, pdfModal, roomModal, editModal].filter(Boolean).forEach((modal) => {
+  [qrModal, pdfModal, roomModal, editModal, shortcutsModal].filter(Boolean).forEach((modal) => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) {
         if (modal === pdfModal) {
@@ -2991,11 +3102,20 @@
       const activeEl = document.activeElement;
       const activeTag = activeEl && activeEl.tagName ? String(activeEl.tagName).toUpperCase() : '';
       const isEditable = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || Boolean(activeEl && activeEl.isContentEditable);
-      const anyModalOpen = [qrModal, pdfModal, roomModal, editModal].some((m) => m && m.classList && m.classList.contains('open'));
+      const anyModalOpen = [qrModal, pdfModal, roomModal, editModal, shortcutsModal].some((m) => m && m.classList && m.classList.contains('open'));
       if (!isEditable && !anyModalOpen && searchInput) {
         if (typeof e.preventDefault === 'function') e.preventDefault();
         searchInput.focus();
         if (typeof searchInput.select === 'function') searchInput.select();
+      }
+    } else if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const activeEl = document.activeElement;
+      const activeTag = activeEl && activeEl.tagName ? String(activeEl.tagName).toUpperCase() : '';
+      const isEditable = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || Boolean(activeEl && activeEl.isContentEditable);
+      const anyOtherModalOpen = [qrModal, pdfModal, roomModal, editModal].some((m) => m && m.classList && m.classList.contains('open'));
+      if (!isEditable && !anyOtherModalOpen && shortcutsModal) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        shortcutsModal.classList.add('open');
       }
     }
   });

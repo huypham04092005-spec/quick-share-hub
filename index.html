@@ -42,6 +42,10 @@
           🌙 Tối
         </button>
 
+        <button id="shortcutsBtn" type="button" class="btn btn-sm" title="Xem bảng phím tắt &amp; mẹo thao tác nhanh (Phím tắt: ?)">
+          ⌨️ Phím tắt
+        </button>
+
         <button id="roomQrBtn" type="button" class="btn btn-sm btn-primary" title="Mở mã QR để quét bằng điện thoại">
           📱 Mã QR Điện Thoại
         </button>
@@ -296,6 +300,7 @@
       <div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;">
         <button id="copyQrTextBtn" type="button" class="btn btn-primary btn-sm">📋 Copy nội dung / Link</button>
         <button id="downloadQrImgBtn" type="button" class="btn btn-emerald btn-sm">💾 Tải ảnh QR</button>
+        <button id="shareQrImgBtn" type="button" class="btn btn-sm" title="Chia sẻ trực tiếp ảnh mã QR qua Zalo, Telegram, AirDrop, Messenger...">📤 Chia sẻ QR</button>
       </div>
     </div>
   </div>
@@ -389,6 +394,46 @@
         <button id="copyRoomLinkBtn" type="button" class="btn btn-sm btn-emerald" title="Sao chép đường dẫn phòng để mời thiết bị khác vào phòng này">🔗 Copy Link Phòng</button>
         <button id="resetDefaultRoomBtn" type="button" class="btn btn-sm">Về phòng mặc định</button>
         <button id="confirmRoomBtn" type="button" class="btn btn-sm btn-primary">Chuyển phòng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts & Quick Guide Modal -->
+  <div id="shortcutsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="shortcutsModalTitle">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="shortcutsModalTitle">⌨️ Bảng Phím Tắt &amp; Thao Tác Nhanh</h3>
+        <button id="closeShortcutsModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
+      </div>
+      <div class="shortcuts-grid">
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Dán nhanh văn bản / ảnh / file toàn trang</span>
+          <kbd class="shortcut-key">Ctrl + V</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Chia sẻ nhanh / Lưu chỉnh sửa mục</span>
+          <kbd class="shortcut-key">Ctrl + Enter</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Copy nhanh mục mới nhất trong phòng</span>
+          <kbd class="shortcut-key">Alt + C</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Tìm kiếm nhanh nội dung trong phòng</span>
+          <kbd class="shortcut-key">/ hoặc Ctrl + K</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Chọn nhiều mục liên tiếp theo dải</span>
+          <kbd class="shortcut-key">Shift + Click</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Mở bảng phím tắt &amp; hướng dẫn nhanh</span>
+          <kbd class="shortcut-key">?</kbd>
+        </div>
+        <div class="shortcut-row">
+          <span class="shortcut-desc">Đóng mọi hộp thoại / Hủy xác nhận xóa</span>
+          <kbd class="shortcut-key">Esc</kbd>
+        </div>
       </div>
     </div>
   </div>
