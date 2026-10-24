@@ -242,8 +242,9 @@
         <img id="qrImage" src="" alt="QR Code" />
       </div>
       <div id="qrCaption" class="qr-caption"></div>
-      <div style="display: flex; justify-content: center; gap: 8px;">
+      <div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;">
         <button id="copyQrTextBtn" type="button" class="btn btn-primary btn-sm">📋 Copy nội dung / Link</button>
+        <button id="downloadQrImgBtn" type="button" class="btn btn-emerald btn-sm">💾 Tải ảnh QR</button>
       </div>
     </div>
   </div>
@@ -289,6 +290,16 @@
         style="min-height: 140px;"
         placeholder="Nhập nội dung mới..."
       ></textarea>
+      <div class="ttl-group" style="justify-content: space-between;">
+        <label for="editItemTtlSelect">⏱️ Gia hạn tự hủy:</label>
+        <select id="editItemTtlSelect" class="ttl-select">
+          <option value="keep" selected>Giữ nguyên thời hạn</option>
+          <option value="1h">Đặt lại: 1 giờ</option>
+          <option value="24h">Đặt lại: 24 giờ</option>
+          <option value="7d">Đặt lại: 7 ngày</option>
+          <option value="never">Không giới hạn (Vĩnh viễn)</option>
+        </select>
+      </div>
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
         <button id="cancelEditItemBtn" type="button" class="btn btn-sm">Hủy</button>
         <button id="saveEditItemBtn" type="button" class="btn btn-sm btn-primary">💾 Lưu thay đổi</button>
@@ -313,6 +324,7 @@
         style="border-radius: 8px; width: 100%;"
         placeholder="Nhập tên phòng (mặc định: default)"
       />
+      <div id="recentRoomsList" class="recent-rooms-list" aria-label="Phòng truy cập gần đây"></div>
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
         <button id="resetDefaultRoomBtn" type="button" class="btn btn-sm">Về phòng mặc định</button>
         <button id="confirmRoomBtn" type="button" class="btn btn-sm btn-primary">Chuyển phòng</button>

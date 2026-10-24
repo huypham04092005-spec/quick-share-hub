@@ -1355,18 +1355,19 @@
         return makeJsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
       }
 
+      const now = Date.now();
       if (body.content !== undefined) {
         const trimmed = String(body.content || '').trim();
-        if (!trimmed) {
-          return makeJsonResponse({ success: false, error: 'Content cannot be empty' }, 400);
-        }
         if (found.item.type !== 'file') {
+          if (!trimmed) {
+            return makeJsonResponse({ success: false, error: 'Content cannot be empty' }, 400);
+          }
           const detected = detectType(trimmed);
           found.item.type = detected.type;
           found.item.content = detected.content;
           found.item.title = body.title ? String(body.title).trim() : detected.title;
         } else {
-          found.item.content = trimmed;
+          found.item.content = trimmed || found.item.fileName || found.item.title || 'file';
         }
       } else if (body.title !== undefined && String(body.title).trim()) {
         found.item.title = String(body.title).trim();
@@ -1374,7 +1375,11 @@
       if (body.pinned !== undefined) {
         found.item.pinned = Boolean(body.pinned);
       }
-      const now = Date.now();
+      if (body.ttl !== undefined && body.ttl !== '' && body.ttl !== 'keep') {
+        const exp = parseTTL(body.ttl, now);
+        found.item.expiresAt = exp;
+        found.item.expires_at = exp;
+      }
       found.item.updatedAt = now;
       found.item.updated_at = now;
       scheduleRoomGistFlush(found.room);
@@ -1917,6 +1922,13 @@
     }
   }
 
+  async function getFileBlob(id) {
+    const fileEntry = await resolveCloudFileEntry(id);
+    if (!fileEntry || !fileEntry.bytes || typeof Blob === 'undefined') return null;
+    const mime = fileEntry.isPdf ? 'application/pdf' : (fileEntry.mimeType || 'application/octet-stream');
+    return new Blob([fileEntry.bytes], { type: mime });
+  }
+
   function getFileMeta(id) {
     const found = findItemAcrossRooms(id, false);
     const fileEntry = cloudState.files.get(id);
@@ -1945,6 +1957,7 @@
     DB_GIST_ID,
     isCloudMode: isCloudHost,
     getBlobUrlForFile,
+    getFileBlob,
     getTextForFile,
     getFileMeta,
     getCloudToken,

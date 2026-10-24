@@ -1,5 +1,5 @@
 // public/sw.js
-const CACHE_NAME = 'quick-share-hub-v5-cloud';
+const CACHE_NAME = 'quick-share-hub-v6-cloud';
 const STATIC_ASSETS = [
   './',
   './index.html',

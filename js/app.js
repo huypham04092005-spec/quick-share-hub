@@ -76,6 +76,7 @@
   const qrCaption = document.getElementById('qrCaption');
   const closeQrModalBtn = document.getElementById('closeQrModalBtn');
   const copyQrTextBtn = document.getElementById('copyQrTextBtn');
+  const downloadQrImgBtn = document.getElementById('downloadQrImgBtn');
 
   const pdfModal = document.getElementById('pdfModal');
   const pdfModalTitle = document.getElementById('pdfModalTitle');
@@ -95,7 +96,9 @@
   let lastWakeSyncAt = 0;
 
   const editModal = document.getElementById('editModal');
+  const editModalTitle = document.getElementById('editModalTitle');
   const editItemTextarea = document.getElementById('editItemTextarea');
+  const editItemTtlSelect = document.getElementById('editItemTtlSelect');
   const closeEditModalBtn = document.getElementById('closeEditModalBtn');
   const cancelEditItemBtn = document.getElementById('cancelEditItemBtn');
   const saveEditItemBtn = document.getElementById('saveEditItemBtn');
@@ -103,6 +106,7 @@
 
   const roomModal = document.getElementById('roomModal');
   const roomNameInput = document.getElementById('roomNameInput');
+  const recentRoomsList = document.getElementById('recentRoomsList');
   const closeRoomModalBtn = document.getElementById('closeRoomModalBtn');
   const resetDefaultRoomBtn = document.getElementById('resetDefaultRoomBtn');
   const confirmRoomBtn = document.getElementById('confirmRoomBtn');
@@ -372,12 +376,17 @@
 
     uploadProgress.classList.add('active');
     uploadProgressBar.style.width = '20%';
+    const optionalCaption = (itemInput && itemInput.value) ? itemInput.value.trim() : '';
+    let uploadedAny = false;
 
     for (let i = 0; i < fileList.length; i++) {
       const file = fileList[i];
       const formData = new FormData();
       formData.append('room', currentRoom);
       formData.append('ttl', ttlSelect.value);
+      if (optionalCaption) {
+        formData.append('caption', optionalCaption);
+      }
       formData.append('file', file, file.name);
 
       try {
@@ -388,6 +397,7 @@
         });
         const data = await res.json();
         if (res.ok && data.success && data.item) {
+          uploadedAny = true;
           upsertItemInState(data.item);
           showToast(`📄 Đã tải lên: ${file.name}`);
         } else {
@@ -396,6 +406,11 @@
       } catch (err) {
         showToast(`❌ Lỗi mạng khi tải lên ${file.name}`);
       }
+    }
+
+    if (uploadedAny && optionalCaption && itemInput) {
+      itemInput.value = '';
+      updateComposerCounter();
     }
 
     uploadProgressBar.style.width = '100%';
@@ -550,8 +565,16 @@
 
   function openEditModal(id) {
     const item = items.find((i) => i.id === id);
-    if (!item || item.type === 'file' || !editModal || !editItemTextarea) return;
+    if (!item || !editModal || !editItemTextarea) return;
     editingItemId = id;
+    if (editModalTitle) {
+      editModalTitle.textContent = item.type === 'file'
+        ? '✏️ Chỉnh sửa ghi chú & Thời hạn File'
+        : '✏️ Chỉnh sửa nội dung';
+    }
+    if (editItemTtlSelect) {
+      editItemTtlSelect.value = 'keep';
+    }
     editItemTextarea.value = item.content || '';
     editModal.classList.add('open');
     editItemTextarea.focus();
@@ -559,17 +582,23 @@
 
   async function saveEditedItem() {
     if (!editingItemId || !editItemTextarea) return;
+    const targetItem = items.find((i) => i.id === editingItemId);
     const trimmed = editItemTextarea.value.trim();
-    if (!trimmed) {
+    if ((!targetItem || targetItem.type !== 'file') && !trimmed) {
       showToast('⚠️ Nội dung không được để trống!');
       return;
+    }
+    const ttlVal = editItemTtlSelect ? editItemTtlSelect.value : 'keep';
+    const payload = { content: trimmed };
+    if (ttlVal && ttlVal !== 'keep') {
+      payload.ttl = ttlVal;
     }
     if (saveEditItemBtn) saveEditItemBtn.disabled = true;
     try {
       const res = await fetch(`/api/items/${encodeURIComponent(editingItemId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: trimmed })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok && data.success && data.item) {
@@ -826,11 +855,9 @@
             📤 Chia sẻ
           </button>
 
-          ${item.type !== 'file' ? `
-            <button type="button" class="btn btn-sm js-edit-btn" data-id="${escapeHtml(item.id)}" title="Chỉnh sửa nội dung mục này">
-              ✏️ Sửa
-            </button>
-          ` : ''}
+          <button type="button" class="btn btn-sm js-edit-btn" data-id="${escapeHtml(item.id)}" title="${item.type === 'file' ? 'Chỉnh sửa ghi chú đính kèm &amp; thời hạn tự hủy' : 'Chỉnh sửa nội dung &amp; thời hạn mục này'}">
+            ✏️ Sửa
+          </button>
 
           <button type="button" class="btn btn-sm js-pin-btn" data-id="${escapeHtml(item.id)}" title="${isPinned ? 'Bỏ ghim mục này' : 'Ghim mục này lên đầu phòng'}">
             ${isPinned ? '📍 Bỏ ghim' : '📌 Ghim'}
@@ -877,6 +904,37 @@
         url: fileUrl
       };
       fallbackCopy = fileUrl;
+
+      // Web Share API Level 2: share actual binary File (PDF / Image / Doc) if supported
+      if (navigator.share && typeof navigator.canShare === 'function') {
+        try {
+          let blob = null;
+          if (isCloud && window.QSHCloud && typeof window.QSHCloud.getFileBlob === 'function') {
+            blob = await window.QSHCloud.getFileBlob(item.id);
+          } else {
+            const res = await fetch(`/api/files/${encodeURIComponent(item.id)}/download`);
+            if (res && res.ok && typeof res.blob === 'function') {
+              blob = await res.blob();
+            }
+          }
+          if (blob) {
+            const mime = item.mimeType || item.mime_type || blob.type || 'application/octet-stream';
+            const fileObj = typeof File === 'function'
+              ? new File([blob], fName, { type: mime })
+              : Object.assign(blob, { name: fName, type: mime });
+            if (navigator.canShare({ files: [fileObj] })) {
+              await navigator.share({
+                files: [fileObj],
+                title: fName,
+                text: (item.content && item.content !== fName) ? item.content : fName
+              });
+              return;
+            }
+          }
+        } catch (err) {
+          if (err && err.name === 'AbortError') return;
+        }
+      }
     }
 
     if (navigator.share && typeof navigator.share === 'function') {
@@ -908,6 +966,21 @@
     } catch (err) {
       showToast('❌ Không thể tạo mã QR');
     }
+  }
+
+  function downloadQrCodePng() {
+    if (!qrImage || !qrImage.src) {
+      showToast('⚠️ Mã QR chưa sẵn sàng để tải xuống');
+      return;
+    }
+    const safeRoom = String(currentRoom || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const a = document.createElement('a');
+    a.href = qrImage.src;
+    a.download = `qr-quick-share-${safeRoom}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    showToast('💾 Đã tải xuống ảnh mã QR (.png)!');
   }
 
   // Multi-Format File & PDF Preview Modal
@@ -1118,6 +1191,51 @@
     }, delay);
   }
 
+  const RECENT_ROOMS_KEY = 'qsh_recent_rooms';
+
+  function getRecentRooms() {
+    let list = ['default'];
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(RECENT_ROOMS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            list = parsed.filter((r) => typeof r === 'string' && r.trim()).map((r) => r.trim().toLowerCase());
+          }
+        }
+      }
+    } catch (_) {}
+    if (!list.includes('default')) list.unshift('default');
+    if (currentRoom && !list.includes(currentRoom)) {
+      list = [currentRoom, ...list];
+    }
+    return Array.from(new Set(list)).slice(0, 8);
+  }
+
+  function recordRecentRoom(room) {
+    const clean = (room && room.trim()) ? room.trim().toLowerCase() : 'default';
+    const existing = getRecentRooms().filter((r) => r !== clean && r !== 'default');
+    const next = clean === 'default' ? ['default', ...existing] : ['default', clean, ...existing];
+    const dedup = Array.from(new Set(next)).slice(0, 8);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(dedup));
+      }
+    } catch (_) {}
+    renderRecentRooms();
+  }
+
+  function renderRecentRooms() {
+    if (!recentRoomsList) return;
+    const rooms = getRecentRooms();
+    recentRoomsList.innerHTML = rooms.map((r) => `
+      <button type="button" class="recent-room-chip ${r === currentRoom ? 'active' : ''}" data-room="${escapeHtml(r)}">
+        🔒 ${escapeHtml(r)}
+      </button>
+    `).join('');
+  }
+
   function switchRoom(newRoom) {
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1126,6 +1244,7 @@
     }
     currentRoom = clean;
     currentRoomBadge.textContent = currentRoom;
+    recordRecentRoom(currentRoom);
 
     const url = new URL(window.location.href);
     if (currentRoom === 'default') {
@@ -1155,14 +1274,52 @@
 
   pasteClipboardBtn.addEventListener('click', async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        itemInput.value = text;
-        updateComposerCounter();
-        await createTextItem(text, ttlSelect.value);
-      } else {
-        showToast('⚠️ Clipboard đang trống hoặc chứa dữ liệu không phải văn bản');
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text && text.trim()) {
+            itemInput.value = text;
+            updateComposerCounter();
+            await createTextItem(text, ttlSelect.value);
+            return;
+          }
+        } catch (_) {}
       }
+
+      if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+        const clipItems = await navigator.clipboard.read();
+        for (const clipItem of (clipItems || [])) {
+          const types = Array.isArray(clipItem.types) ? clipItem.types : [];
+          const imgType = types.find((t) => /^image\/(png|jpe?g|webp|gif|bmp|svg\+xml)$/i.test(t) || t.startsWith('image/'));
+          if (imgType && typeof clipItem.getType === 'function') {
+            const blob = await clipItem.getType(imgType);
+            if (blob) {
+              const ext = imgType.includes('jpeg') || imgType.includes('jpg') ? 'jpg'
+                : imgType.includes('webp') ? 'webp'
+                : imgType.includes('gif') ? 'gif'
+                : 'png';
+              const fName = `clipboard-image-${Date.now()}.${ext}`;
+              const fileObj = typeof File === 'function'
+                ? new File([blob], fName, { type: imgType })
+                : Object.assign(blob, { name: fName, type: imgType });
+              await uploadFiles([fileObj]);
+              return;
+            }
+          }
+          if (types.includes('text/plain') && typeof clipItem.getType === 'function') {
+            const textBlob = await clipItem.getType('text/plain');
+            const textVal = textBlob && typeof textBlob.text === 'function' ? await textBlob.text() : '';
+            if (textVal && textVal.trim()) {
+              itemInput.value = textVal;
+              updateComposerCounter();
+              await createTextItem(textVal, ttlSelect.value);
+              return;
+            }
+          }
+        }
+      }
+
+      showToast('⚠️ Clipboard đang trống hoặc chứa dữ liệu không hỗ trợ');
     } catch (err) {
       itemInput.focus();
       showToast('💡 Nhấn Ctrl+V hoặc giữ chạm để dán nội dung từ Clipboard');
@@ -1397,6 +1554,11 @@
 
   closeQrModalBtn.addEventListener('click', () => qrModal.classList.remove('open'));
   copyQrTextBtn.addEventListener('click', () => copyToClipboard(currentQrText, copyQrTextBtn));
+  if (downloadQrImgBtn) {
+    downloadQrImgBtn.addEventListener('click', () => {
+      downloadQrCodePng();
+    });
+  }
 
   if (copyModalTextBtn) {
     copyModalTextBtn.addEventListener('click', () => {
@@ -1410,9 +1572,23 @@
 
   roomSwitchBtn.addEventListener('click', () => {
     roomNameInput.value = currentRoom === 'default' ? '' : currentRoom;
+    renderRecentRooms();
     roomModal.classList.add('open');
     roomNameInput.focus();
   });
+
+  if (recentRoomsList) {
+    recentRoomsList.addEventListener('click', (e) => {
+      const chip = e.target && typeof e.target.closest === 'function'
+        ? e.target.closest('.recent-room-chip')
+        : null;
+      if (chip) {
+        const targetRoom = chip.getAttribute('data-room') || 'default';
+        roomModal.classList.remove('open');
+        switchRoom(targetRoom);
+      }
+    });
+  }
 
   closeRoomModalBtn.addEventListener('click', () => roomModal.classList.remove('open'));
   resetDefaultRoomBtn.addEventListener('click', () => {
@@ -1482,6 +1658,7 @@
 
   // Initialize
   currentRoomBadge.textContent = currentRoom;
+  recordRecentRoom(currentRoom);
   updateComposerCounter();
   fetchPublicOrigin();
   fetchItems();
