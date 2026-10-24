@@ -259,6 +259,7 @@
     const fileSize = row.fileSize ?? row.file_size ?? null;
     const mimeType = row.mimeType ?? row.mime_type ?? null;
     const createdAt = row.createdAt ?? row.created_at ?? Date.now();
+    const updatedAt = row.updatedAt ?? row.updated_at ?? createdAt;
     const expiresAt = row.expiresAt !== undefined ? row.expiresAt : (row.expires_at !== undefined ? row.expires_at : null);
 
     return {
@@ -279,6 +280,8 @@
       is_pdf: isPdfNum,
       createdAt,
       created_at: createdAt,
+      updatedAt,
+      updated_at: updatedAt,
       expiresAt,
       expires_at: expiresAt,
       pinned: Boolean(row.pinned),
@@ -481,9 +484,29 @@
     return true;
   }
 
+  function ingestRemoteRoomMeta(room, parsed) {
+    if (!parsed || typeof parsed !== 'object') return;
+    if (Array.isArray(parsed.deletedIds)) {
+      for (const delId of parsed.deletedIds) {
+        if (typeof delId === 'string' && delId) {
+          cloudState.deletedIds.add(delId);
+          cloudState.files.delete(delId);
+        }
+      }
+    }
+    const remoteCleared = Number(parsed.clearedAt) || 0;
+    if (remoteCleared > 0) {
+      const localCleared = cloudState.clearedRoomsAt.get(room) || 0;
+      if (remoteCleared > localCleared) {
+        cloudState.clearedRoomsAt.set(room, remoteCleared);
+      }
+    }
+  }
+
   function mergeRoomItems(localItems, remoteItems, room) {
     const clearedAt = cloudState.clearedRoomsAt.get(room) || 0;
     const byId = new Map();
+
     for (const raw of (remoteItems || [])) {
       const item = formatItem(raw);
       if (!item || !item.id) continue;
@@ -491,12 +514,25 @@
       if (clearedAt && item.createdAt <= clearedAt) continue;
       byId.set(item.id, item);
     }
+
     for (const raw of (localItems || [])) {
       const item = formatItem(raw);
       if (!item || !item.id) continue;
       if (cloudState.deletedIds.has(item.id)) continue;
-      byId.set(item.id, item);
+      if (clearedAt && item.createdAt <= clearedAt) continue;
+
+      const existingRemote = byId.get(item.id);
+      if (existingRemote) {
+        const localTs = Number(item.updatedAt ?? item.createdAt ?? 0);
+        const remoteTs = Number(existingRemote.updatedAt ?? existingRemote.createdAt ?? 0);
+        if (localTs >= remoteTs) {
+          byId.set(item.id, item);
+        }
+      } else {
+        byId.set(item.id, item);
+      }
     }
+
     const merged = Array.from(byId.values());
     merged.sort((a, b) => {
       if (Boolean(b.pinned) !== Boolean(a.pinned)) {
@@ -530,6 +566,7 @@
                 try {
                   const parsed = JSON.parse(fileObj.content);
                   const rName = parsed.room || fname.slice(5, -5);
+                  ingestRemoteRoomMeta(rName, parsed);
                   if (Array.isArray(parsed.items)) {
                     const existingLocal = cloudState.rooms.get(rName) || [];
                     cloudState.rooms.set(rName, mergeRoomItems(existingLocal, parsed.items, rName));
@@ -586,16 +623,20 @@
           if (remoteGistFiles[safeFileKey] && remoteGistFiles[safeFileKey].content) {
             try {
               const parsed = JSON.parse(remoteGistFiles[safeFileKey].content);
+              ingestRemoteRoomMeta(r, parsed);
               if (Array.isArray(parsed.items)) remoteItems = parsed.items;
             } catch (_) {}
           }
           const localItems = cloudState.rooms.get(r) || [];
           const merged = mergeRoomItems(localItems, remoteItems, r);
           cloudState.rooms.set(r, merged);
+          const recentDeletedIds = Array.from(cloudState.deletedIds).slice(-500);
           filesPayload[safeFileKey] = {
             content: JSON.stringify({
               room: r,
               updatedAt: Date.now(),
+              clearedAt: cloudState.clearedRoomsAt.get(r) || 0,
+              deletedIds: recentDeletedIds,
               items: merged
             }, null, 2)
           };
@@ -617,11 +658,46 @@
   }
 
   async function uploadBinaryFileToCloudGist(item, bytes) {
-    if (!isPersistentRoom(item.room) || bytes.length > 15 * 1024 * 1024) {
+    if (!isPersistentRoom(item.room) || bytes.length > 25 * 1024 * 1024) {
       return null;
     }
     try {
       const b64 = uint8ToBase64(bytes);
+      const chunkMax = 2 * 1024 * 1024; // 2 MB base64 per Gist file entry
+      const gistFiles = {};
+      if (b64.length <= chunkMax) {
+        gistFiles['file_payload.json'] = {
+          content: JSON.stringify({
+            id: item.id,
+            room: item.room,
+            fileName: item.fileName,
+            mimeType: item.mimeType,
+            fileSize: item.fileSize,
+            isPdf: item.isPdf,
+            base64: b64
+          })
+        };
+      } else {
+        const chunkCount = Math.ceil(b64.length / chunkMax);
+        for (let c = 0; c < chunkCount; c++) {
+          const padIdx = String(c).padStart(3, '0');
+          gistFiles[`chunk_${padIdx}.b64`] = {
+            content: b64.slice(c * chunkMax, (c + 1) * chunkMax)
+          };
+        }
+        gistFiles['file_payload.json'] = {
+          content: JSON.stringify({
+            id: item.id,
+            room: item.room,
+            fileName: item.fileName,
+            mimeType: item.mimeType,
+            fileSize: item.fileSize,
+            isPdf: item.isPdf,
+            chunkCount
+          })
+        };
+      }
+
       const res = await nativeFetch('https://api.github.com/gists', {
         method: 'POST',
         headers: {
@@ -632,19 +708,7 @@
         body: JSON.stringify({
           description: `Quick Share Hub File: ${item.fileName} (${item.id})`,
           public: false,
-          files: {
-            'file_payload.json': {
-              content: JSON.stringify({
-                id: item.id,
-                room: item.room,
-                fileName: item.fileName,
-                mimeType: item.mimeType,
-                fileSize: item.fileSize,
-                isPdf: item.isPdf,
-                base64: b64
-              })
-            }
-          }
+          files: gistFiles
         })
       });
       if (res.ok) {
@@ -683,6 +747,26 @@
           isPdf: Boolean(parsed.isPdf)
         };
       }
+      if (parsed && Number(parsed.chunkCount) > 0) {
+        const parts = [];
+        for (let c = 0; c < Number(parsed.chunkCount); c++) {
+          const key = `chunk_${String(c).padStart(3, '0')}.b64`;
+          const cObj = gist.files && gist.files[key];
+          if (!cObj) return null;
+          let chunkText = cObj.content || '';
+          if (cObj.truncated && cObj.raw_url) {
+            const cRes = await nativeFetch(cObj.raw_url);
+            chunkText = await cRes.text();
+          }
+          parts.push(chunkText);
+        }
+        return {
+          bytes: base64ToUint8(parts.join('')),
+          mimeType: parsed.mimeType || 'application/octet-stream',
+          fileName: parsed.fileName || 'download',
+          isPdf: Boolean(parsed.isPdf)
+        };
+      }
     } catch (_) {}
     return null;
   }
@@ -710,7 +794,7 @@
       broadcastChannel = new BroadcastChannel('quick_share_hub_247_channel');
       broadcastChannel.onmessage = (ev) => {
         if (ev && ev.data) {
-          dispatchToLocalSockets(ev.data.room, ev.data.payload, false);
+          dispatchToLocalSockets(ev.data.room, ev.data.payload, false, ev.data.eventId);
         }
       };
     } catch (_) {}
@@ -723,11 +807,12 @@
 
   function broadcastRoomEvent(room, payload) {
     const normalized = normalizeRoom(room);
-    dispatchToLocalSockets(normalized, payload, true);
+    const eventId = `${Date.now()}_${++cloudState.seqCounter}_${Math.random().toString(36).slice(2, 8)}`;
+    dispatchToLocalSockets(normalized, payload, true, eventId);
 
     if (broadcastChannel) {
       try {
-        broadcastChannel.postMessage({ room: normalized, payload });
+        broadcastChannel.postMessage({ room: normalized, payload, eventId });
       } catch (_) {}
     }
 
@@ -736,20 +821,48 @@
       const topic = topicForRoom(normalized);
       nativeFetch(`https://ntfy.sh/${topic}`, {
         method: 'POST',
-        body: JSON.stringify({ _qsh: 1, room: normalized, payload })
+        body: JSON.stringify({ _qsh: 1, room: normalized, eventId, payload })
       }).catch(() => {});
     }
   }
 
-  function dispatchToLocalSockets(room, payload, isLocalOrigin) {
+  function applyRemoteEventToCloudState(room, payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const normalized = normalizeRoom(room);
+    const list = cloudState.rooms.get(normalized) || [];
+    if ((payload.type === 'item_created' || payload.type === 'item_updated' || payload.type === 'item_pinned') && payload.item) {
+      const incoming = formatItem(payload.item);
+      if (!incoming || !incoming.id) return;
+      cloudState.deletedIds.delete(incoming.id);
+      const idx = list.findIndex((i) => i.id === incoming.id);
+      if (idx >= 0) {
+        list[idx] = incoming;
+      } else {
+        list.unshift(incoming);
+      }
+      cloudState.rooms.set(normalized, list);
+    } else if (payload.type === 'item_deleted' && payload.id) {
+      cloudState.deletedIds.add(payload.id);
+      cloudState.files.delete(payload.id);
+      cloudState.rooms.set(normalized, list.filter((i) => i.id !== payload.id));
+    } else if (payload.type === 'room_cleared') {
+      cloudState.clearedRoomsAt.set(normalized, Date.now());
+      cloudState.rooms.set(normalized, []);
+    }
+  }
+
+  function dispatchToLocalSockets(room, payload, isLocalOrigin, eventId) {
+    if (!isLocalOrigin) {
+      applyRemoteEventToCloudState(room, payload);
+    }
     const raw = JSON.stringify(payload);
     for (const client of localWsClients) {
       if (client.readyState === 1 && client.rooms.has(room)) {
-        if (!isLocalOrigin && client._seenMsgIds && payload.item && client._seenMsgIds.has(payload.item.id)) {
-          continue;
-        }
-        if (payload.item && client._seenMsgIds) {
-          client._seenMsgIds.add(payload.item.id);
+        if (eventId && client._seenMsgIds) {
+          if (client._seenMsgIds.has(eventId)) {
+            continue;
+          }
+          client._seenMsgIds.add(eventId);
         }
         client._emitMessage(raw);
       }
@@ -879,7 +992,7 @@
             if (outer && outer.event === 'message' && outer.message) {
               const inner = JSON.parse(outer.message);
               if (inner && inner._qsh && inner.payload) {
-                dispatchToLocalSockets(inner.room || room, inner.payload, false);
+                dispatchToLocalSockets(inner.room || room, inner.payload, false, inner.eventId);
               }
             }
           } catch (_) {}
@@ -1185,7 +1298,56 @@
       if (!found) {
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
+      const now = Date.now();
       found.item.pinned = !found.item.pinned;
+      found.item.updatedAt = now;
+      found.item.updated_at = now;
+      scheduleRoomGistFlush(found.room);
+      broadcastRoomEvent(found.room, { type: 'item_created', item: found.item });
+      return makeJsonResponse({ success: true, item: found.item }, 200);
+    }
+
+    // 5c. PUT /api/items/:id (Edit Note / Link / Title)
+    const itemSingleMatch = apiPath.match(/^\/api\/items\/([^/]+)$/);
+    if (itemSingleMatch && upperMethod === 'PUT') {
+      const id = decodeURIComponent(itemSingleMatch[1]);
+      const found = findItemAcrossRooms(id, false);
+      if (!found) {
+        return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
+      }
+      let body = {};
+      try {
+        if (typeof init.body === 'string') {
+          body = JSON.parse(init.body);
+        } else if (init.body && typeof init.body === 'object') {
+          body = init.body;
+        }
+      } catch (_) {
+        return makeJsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
+      }
+
+      if (body.content !== undefined) {
+        const trimmed = String(body.content || '').trim();
+        if (!trimmed) {
+          return makeJsonResponse({ success: false, error: 'Content cannot be empty' }, 400);
+        }
+        if (found.item.type !== 'file') {
+          const detected = detectType(trimmed);
+          found.item.type = detected.type;
+          found.item.content = detected.content;
+          found.item.title = body.title ? String(body.title).trim() : detected.title;
+        } else {
+          found.item.content = trimmed;
+        }
+      } else if (body.title !== undefined && String(body.title).trim()) {
+        found.item.title = String(body.title).trim();
+      }
+      if (body.pinned !== undefined) {
+        found.item.pinned = Boolean(body.pinned);
+      }
+      const now = Date.now();
+      found.item.updatedAt = now;
+      found.item.updated_at = now;
       scheduleRoomGistFlush(found.room);
       broadcastRoomEvent(found.room, { type: 'item_created', item: found.item });
       return makeJsonResponse({ success: true, item: found.item }, 200);

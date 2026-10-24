@@ -45,6 +45,8 @@
   const telemetryToggleBtn = document.getElementById('telemetryToggleBtn');
   const syncCloudNowBtn = document.getElementById('syncCloudNowBtn');
   const exportRoomBtn = document.getElementById('exportRoomBtn');
+  const importRoomBtn = document.getElementById('importRoomBtn');
+  const importRoomInput = document.getElementById('importRoomInput');
   const cleanupStorageBtn = document.getElementById('cleanupStorageBtn');
   const resetBandwidthBtn = document.getElementById('resetBandwidthBtn');
   const statStoragePercent = document.getElementById('statStoragePercent');
@@ -80,6 +82,13 @@
   const pdfModalOpenTab = document.getElementById('pdfModalOpenTab');
   const pdfModalDownload = document.getElementById('pdfModalDownload');
   const closePdfModalBtn = document.getElementById('closePdfModalBtn');
+
+  const editModal = document.getElementById('editModal');
+  const editItemTextarea = document.getElementById('editItemTextarea');
+  const closeEditModalBtn = document.getElementById('closeEditModalBtn');
+  const cancelEditItemBtn = document.getElementById('cancelEditItemBtn');
+  const saveEditItemBtn = document.getElementById('saveEditItemBtn');
+  let editingItemId = null;
 
   const roomModal = document.getElementById('roomModal');
   const roomNameInput = document.getElementById('roomNameInput');
@@ -418,6 +427,85 @@
     showToast(`📥 Đã xuất file backup phòng "${currentRoom}" (.json)!`);
   }
 
+  async function importRoomBackupJson(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const list = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.items) ? parsed.items : null);
+      if (!list) {
+        showToast('❌ File JSON không đúng định dạng Backup của Quick Share Hub');
+        return;
+      }
+      let restored = 0;
+      for (const entry of list.slice().reverse()) {
+        if (!entry || !entry.content || entry.type === 'file') continue;
+        const exists = items.some((i) => i.content === entry.content && i.type === entry.type);
+        if (exists) continue;
+        const res = await fetch('/api/items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            room: currentRoom,
+            content: String(entry.content),
+            title: entry.title || undefined,
+            pinned: Boolean(entry.pinned),
+            ttl: '7d'
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.item) {
+          upsertItemInState(data.item);
+          restored++;
+        }
+      }
+      showToast(`📤 Đã khôi phục ${restored} mục vào phòng "${currentRoom}"!`);
+    } catch (_) {
+      showToast('❌ Lỗi khi đọc file Backup JSON');
+    } finally {
+      if (importRoomInput) importRoomInput.value = '';
+    }
+  }
+
+  function openEditModal(id) {
+    const item = items.find((i) => i.id === id);
+    if (!item || item.type === 'file' || !editModal || !editItemTextarea) return;
+    editingItemId = id;
+    editItemTextarea.value = item.content || '';
+    editModal.classList.add('open');
+    editItemTextarea.focus();
+  }
+
+  async function saveEditedItem() {
+    if (!editingItemId || !editItemTextarea) return;
+    const trimmed = editItemTextarea.value.trim();
+    if (!trimmed) {
+      showToast('⚠️ Nội dung không được để trống!');
+      return;
+    }
+    if (saveEditItemBtn) saveEditItemBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(editingItemId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: trimmed })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.item) {
+        upsertItemInState(data.item);
+        editModal.classList.remove('open');
+        editingItemId = null;
+        showToast('✏️ Đã cập nhật nội dung thành công!');
+      } else {
+        showToast('❌ ' + (data.error || 'Không thể cập nhật mục'));
+      }
+    } catch (_) {
+      showToast('❌ Lỗi kết nối khi lưu chỉnh sửa');
+    } finally {
+      if (saveEditItemBtn) saveEditItemBtn.disabled = false;
+    }
+  }
+
   // State Manipulation
   function upsertItemInState(newItem) {
     const idx = items.findIndex((i) => i.id === newItem.id);
@@ -646,6 +734,12 @@
             📱 Mã QR
           </button>
 
+          ${item.type !== 'file' ? `
+            <button type="button" class="btn btn-sm js-edit-btn" data-id="${escapeHtml(item.id)}" title="Chỉnh sửa nội dung mục này">
+              ✏️ Sửa
+            </button>
+          ` : ''}
+
           <button type="button" class="btn btn-sm js-pin-btn" data-id="${escapeHtml(item.id)}" title="${isPinned ? 'Bỏ ghim mục này' : 'Ghim mục này lên đầu phòng'}">
             ${isPinned ? '📍 Bỏ ghim' : '📌 Ghim'}
           </button>
@@ -679,20 +773,23 @@
 
   // PDF Preview Modal & Cloud File Download
   async function openPdfPreviewModal(id, fileName) {
-    pdfModalTitle.textContent = `📄 ${fileName || 'Xem trước PDF'}`;
-    pdfModal.classList.add('open');
-
     if (window.QSHCloud && window.QSHCloud.isCloudMode()) {
       const blobUrl = await window.QSHCloud.getBlobUrlForFile(id);
       if (blobUrl) {
+        pdfModalTitle.textContent = `📄 ${fileName || 'Xem trước tài liệu'}`;
+        pdfModal.classList.add('open');
         pdfViewerFrame.src = blobUrl;
         pdfModalOpenTab.href = blobUrl;
         pdfModalDownload.href = blobUrl;
         pdfModalDownload.setAttribute('download', fileName || 'document.pdf');
         return;
       }
+      showToast('⚠️ File này vượt giới hạn lưu trữ Cloud Gist (25MB) hoặc đã bị xóa khỏi bộ nhớ đám mây.');
+      return;
     }
 
+    pdfModalTitle.textContent = `📄 ${fileName || 'Xem trước PDF'}`;
+    pdfModal.classList.add('open');
     const previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
     const downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
     pdfViewerFrame.src = previewUrl;
@@ -713,6 +810,7 @@
         a.remove();
         return;
       }
+      showToast('⚠️ Không thể tải file: dữ liệu nhị phân không còn trên Cloud Gist.');
     }
   }
 
@@ -915,6 +1013,12 @@
       return;
     }
 
+    const editBtn = e.target.closest('.js-edit-btn');
+    if (editBtn) {
+      openEditModal(editBtn.getAttribute('data-id'));
+      return;
+    }
+
     const noteDlBtn = e.target.closest('.js-download-note-btn');
     if (noteDlBtn) {
       downloadNoteAsTxt(noteDlBtn.getAttribute('data-id'));
@@ -972,6 +1076,43 @@
   if (exportRoomBtn) {
     exportRoomBtn.addEventListener('click', () => {
       exportRoomBackupJson();
+    });
+  }
+
+  if (importRoomBtn && importRoomInput) {
+    importRoomBtn.addEventListener('click', () => {
+      importRoomInput.click();
+    });
+    importRoomInput.addEventListener('change', () => {
+      if (importRoomInput.files && importRoomInput.files[0]) {
+        importRoomBackupJson(importRoomInput.files[0]);
+      }
+    });
+  }
+
+  if (closeEditModalBtn && editModal) {
+    closeEditModalBtn.addEventListener('click', () => {
+      editModal.classList.remove('open');
+      editingItemId = null;
+    });
+  }
+  if (cancelEditItemBtn && editModal) {
+    cancelEditItemBtn.addEventListener('click', () => {
+      editModal.classList.remove('open');
+      editingItemId = null;
+    });
+  }
+  if (saveEditItemBtn) {
+    saveEditItemBtn.addEventListener('click', () => {
+      saveEditedItem();
+    });
+  }
+  if (editItemTextarea) {
+    editItemTextarea.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        saveEditedItem();
+      }
     });
   }
 
@@ -1038,11 +1179,12 @@
   });
 
   // Close modals on backdrop click
-  [qrModal, pdfModal, roomModal].forEach((modal) => {
+  [qrModal, pdfModal, roomModal, editModal].filter(Boolean).forEach((modal) => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) {
         modal.classList.remove('open');
         if (modal === pdfModal) pdfViewerFrame.src = 'about:blank';
+        if (modal === editModal) editingItemId = null;
       }
     });
   });
