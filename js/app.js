@@ -360,7 +360,7 @@
     composerCharCount.textContent = `${chars.toLocaleString('vi-VN')} ký tự • ${lines} dòng`;
   }
 
-  async function copyToClipboard(text, buttonEl) {
+  async function copyToClipboard(text, buttonEl, toastMessage = '📋 Đã sao chép vào Clipboard!') {
     try {
       await navigator.clipboard.writeText(text);
     } catch (_) {
@@ -380,7 +380,9 @@
         buttonEl.innerHTML = original;
       }, 1500);
     }
-    showToast('📋 Đã sao chép vào Clipboard!');
+    if (toastMessage) {
+      showToast(toastMessage);
+    }
   }
 
   async function convertImageBlobToPng(blob) {
@@ -495,17 +497,31 @@
           const sharedUrl = (params.get('shared_url') || '').trim();
 
           if (sharedTitle || sharedText || sharedUrl) {
-            const shareParts = [];
-            if (sharedTitle && sharedTitle !== sharedUrl && (!sharedText || !sharedText.includes(sharedTitle))) {
-              shareParts.push(sharedTitle);
+            const hasDistinctText = Boolean(
+              sharedText &&
+              sharedText !== sharedUrl &&
+              sharedText !== sharedTitle
+            );
+            let combinedShare = '';
+            let explicitTitle;
+            if (sharedUrl && !hasDistinctText && /^https?:\/\/\S+$/i.test(sharedUrl)) {
+              combinedShare = sharedUrl;
+              if (sharedTitle && sharedTitle !== sharedUrl) {
+                explicitTitle = sharedTitle;
+              }
+            } else {
+              const shareParts = [];
+              if (sharedTitle && sharedTitle !== sharedUrl && (!sharedText || !sharedText.includes(sharedTitle))) {
+                shareParts.push(sharedTitle);
+              }
+              if (sharedText && sharedText !== sharedUrl) {
+                shareParts.push(sharedText);
+              }
+              if (sharedUrl && (!sharedText || !sharedText.includes(sharedUrl))) {
+                shareParts.push(sharedUrl);
+              }
+              combinedShare = shareParts.join('\n').trim();
             }
-            if (sharedText && sharedText !== sharedUrl) {
-              shareParts.push(sharedText);
-            }
-            if (sharedUrl && (!sharedText || !sharedText.includes(sharedUrl))) {
-              shareParts.push(sharedUrl);
-            }
-            const combinedShare = shareParts.join('\n').trim();
             try {
               const cleanUrl = new URL(window.location.href);
               cleanUrl.searchParams.delete('shared_title');
@@ -519,7 +535,7 @@
               }
             } catch (_) {}
             if (combinedShare) {
-              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h');
+              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h', explicitTitle);
             }
           } else if (previewId) {
             const target = items.find((i) => i.id === previewId);
@@ -535,7 +551,7 @@
     }
   }
 
-  async function createTextItem(content, ttl = ttlSelect.value) {
+  async function createTextItem(content, ttl = ttlSelect.value, title = undefined) {
     const trimmed = (content || '').trim();
     if (!trimmed) {
       showToast('⚠️ Vui lòng nhập nội dung hoặc dán từ Clipboard!');
@@ -544,14 +560,18 @@
 
     sendItemBtn.disabled = true;
     try {
+      const payload = {
+        room: currentRoom,
+        content: trimmed,
+        ttl
+      };
+      if (title && typeof title === 'string' && title.trim()) {
+        payload.title = title.trim();
+      }
       const res = await fetch('/api/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          room: currentRoom,
-          content: trimmed,
-          ttl
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok && data.success && data.item) {
@@ -1060,17 +1080,23 @@
     }
     if (batchSelectAllBtn) {
       const list = Array.isArray(visibleItems) ? visibleItems : getFilteredSortedItems();
-      const allVisibleSelected = list.length > 0 && list.every((i) => selectedItemIds.has(i.id));
+      const allVisibleSelected = list.length === 0 || list.every((i) => selectedItemIds.has(i.id));
       batchSelectAllBtn.textContent = allVisibleSelected ? '☑️ Bỏ chọn tất cả' : '☑️ Chọn tất cả';
     }
   }
 
   function toggleSelectAllVisibleItems() {
     const visible = getFilteredSortedItems();
-    if (visible.length === 0) return;
+    if (visible.length === 0) {
+      if (selectedItemIds.size > 0) {
+        selectedItemIds.clear();
+        renderItems();
+      }
+      return;
+    }
     const allVisibleSelected = visible.every((i) => selectedItemIds.has(i.id));
     if (allVisibleSelected) {
-      visible.forEach((i) => selectedItemIds.delete(i.id));
+      selectedItemIds.clear();
     } else {
       visible.forEach((i) => selectedItemIds.add(i.id));
     }
@@ -1096,8 +1122,7 @@
       return String(item.content || '');
     }).filter(Boolean).join('\n\n');
 
-    await copyToClipboard(combinedText, batchCopySelectedBtn);
-    showToast(`📋 Đã sao chép ${selectedList.length} mục đã chọn!`);
+    await copyToClipboard(combinedText, batchCopySelectedBtn, `📋 Đã sao chép ${selectedList.length} mục đã chọn!`);
   }
 
   async function batchDeleteSelectedItems() {
@@ -1476,8 +1501,7 @@
         if (err && err.name === 'AbortError') return;
       }
     }
-    await copyToClipboard(fallbackCopy, null);
-    showToast('📤 Đã sao chép nội dung để chia sẻ!');
+    await copyToClipboard(fallbackCopy, null, '📤 Đã sao chép nội dung để chia sẻ!');
   }
 
   // QR Modal
@@ -2159,12 +2183,12 @@
   }
   if (batchCopySelectedBtn) {
     batchCopySelectedBtn.addEventListener('click', () => {
-      batchCopySelectedItems();
+      return batchCopySelectedItems();
     });
   }
   if (batchDeleteSelectedBtn) {
     batchDeleteSelectedBtn.addEventListener('click', () => {
-      batchDeleteSelectedItems();
+      return batchDeleteSelectedItems();
     });
   }
   if (batchClearSelectionBtn) {

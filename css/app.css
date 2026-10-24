@@ -1179,10 +1179,94 @@ body {
   border-color: rgba(15, 23, 42, 0.12);
 }
 
+[data-theme="light"] .note-code-block {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.16);
+}
+
+[data-theme="light"] .note-code-header {
+  background: #e2e8f0;
+  border-bottom-color: rgba(15, 23, 42, 0.14);
+  color: #334155;
+}
+
+[data-theme="light"] .note-code-lang {
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .note-code-content {
+  color: #0f172a;
+  background: #ffffff;
+}
+
+[data-theme="light"] .note-expand-btn {
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.35);
+  background: #eff6ff;
+}
+
 [data-theme="light"] .modal-box {
   background: #ffffff;
   color: #0f172a;
   border-color: rgba(15, 23, 42, 0.18);
+}
+
+[data-theme="light"] .modal-text-container,
+[data-theme="light"] .modal-image-container,
+[data-theme="light"] .pdf-viewer-frame {
+  background: #f8fafc;
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+[data-theme="light"] .modal-text-preview {
+  color: #0f172a;
+}
+
+[data-theme="light"] .toast {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+[data-theme="light"] .status-pill {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+[data-theme="light"] .status-pill.offline,
+[data-theme="light"] .ttl-badge,
+[data-theme="light"] .pin-badge {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+[data-theme="light"] .type-badge.link,
+[data-theme="light"] .cloud-badge-247,
+[data-theme="light"] .recent-room-chip.active {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+[data-theme="light"] .type-badge.note {
+  background: rgba(139, 92, 246, 0.14);
+  color: #6d28d9;
+}
+
+[data-theme="light"] .type-badge.pdf {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+}
+
+[data-theme="light"] .type-badge.file {
+  background: rgba(16, 185, 129, 0.14);
+  color: #047857;
+}
+
+[data-theme="light"] .quota-bar-track,
+[data-theme="light"] .upload-progress {
+  background: #cbd5e1;
 }
 
 [data-theme="light"] .batch-action-bar {
@@ -1199,5 +1283,3 @@ body {
 [data-theme="light"] .note-inline-link {
   color: #2563eb;
 }
-
-
