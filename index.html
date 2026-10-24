@@ -223,13 +223,23 @@
         <button type="button" class="filter-tab" data-filter="file">📄 PDF &amp; File (<span id="countFile">0</span>)</button>
       </div>
 
-      <input
-        id="searchInput"
-        type="search"
-        class="search-input"
-        placeholder="🔍 Tìm nhanh link, tên file, nội dung... ( / hoặc Ctrl+K )"
-        title="Nhấn / hoặc Ctrl+K để tìm kiếm nhanh"
-      />
+      <div class="feed-controls">
+        <select id="sortOrderSelect" class="sort-select" aria-label="Sắp xếp danh sách mục" title="Sắp xếp danh sách mục trong phòng">
+          <option value="newest" selected>🕒 Mới nhất trước</option>
+          <option value="oldest">⏳ Cũ nhất trước</option>
+          <option value="expiring">⚡ Sắp hết hạn trước</option>
+          <option value="size_desc">📦 Dung lượng lớn nhất</option>
+          <option value="title_asc">🔤 Tên A → Z</option>
+        </select>
+
+        <input
+          id="searchInput"
+          type="search"
+          class="search-input"
+          placeholder="🔍 Tìm nhanh link, tên file, nội dung... ( / hoặc Ctrl+K )"
+          title="Nhấn / hoặc Ctrl+K để tìm kiếm nhanh"
+        />
+      </div>
     </section>
 
     <!-- Shared Items Feed -->
@@ -246,7 +256,7 @@
         <button id="closeQrModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
       </div>
       <div class="qr-display-box">
-        <img id="qrImage" src="" alt="QR Code" />
+        <img id="qrImage" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="QR Code" />
       </div>
       <div id="qrCaption" class="qr-caption"></div>
       <div style="display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;">
@@ -262,6 +272,7 @@
       <div class="modal-header">
         <h3 id="pdfModalTitle">📄 Xem trước PDF</h3>
         <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button id="copyModalImageBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;">🖼️ Copy Ảnh</button>
           <button id="copyModalTextBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;">📋 Copy nội dung</button>
           <a id="pdfModalOpenTab" href="#" target="_blank" rel="noopener" class="btn btn-sm">↗ Mở tab mới</a>
           <a id="pdfModalDownload" href="#" download class="btn btn-sm btn-primary">⬇ Tải xuống PDF</a>
@@ -276,7 +287,7 @@
       </div>
       <iframe id="pdfViewerFrame" class="pdf-viewer-frame" title="PDF Preview"></iframe>
       <div id="imagePreviewContainer" class="modal-image-container" style="display: none;">
-        <img id="modalImagePreview" src="" alt="Xem trước ảnh" class="modal-image-preview" />
+        <img id="modalImagePreview" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Xem trước ảnh" class="modal-image-preview" />
       </div>
       <div id="textPreviewContainer" class="modal-text-container" style="display: none;">
         <pre id="modalTextPreview" class="modal-text-preview"></pre>

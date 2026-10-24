@@ -3,10 +3,13 @@
   'use strict';
 
   // State
+  const TRANSPARENT_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
   let currentRoom = getRoomFromUrl();
   let items = [];
   let activeFilter = 'all';
+  let sortOrder = 'newest';
   let searchQuery = '';
+  const expandedNoteIds = new Set();
   let ws = null;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
@@ -37,6 +40,7 @@
 
   const filterTabs = document.querySelectorAll('.filter-tab');
   const filterTabsBar = document.getElementById('filterTabsBar');
+  const sortOrderSelect = document.getElementById('sortOrderSelect');
   const searchInput = document.getElementById('searchInput');
   const itemsContainer = document.getElementById('itemsContainer');
 
@@ -89,6 +93,7 @@
   const pdfModalOpenTab = document.getElementById('pdfModalOpenTab');
   const pdfModalDownload = document.getElementById('pdfModalDownload');
   const closePdfModalBtn = document.getElementById('closePdfModalBtn');
+  const copyModalImageBtn = document.getElementById('copyModalImageBtn');
   const copyModalTextBtn = document.getElementById('copyModalTextBtn');
   const pdfMobileFallbackBar = document.getElementById('pdfMobileFallbackBar');
   const pdfFallbackOpenLink = document.getElementById('pdfFallbackOpenLink');
@@ -98,6 +103,7 @@
   const textPreviewContainer = document.getElementById('textPreviewContainer');
   const modalTextPreview = document.getElementById('modalTextPreview');
   let currentModalTextContent = '';
+  let currentModalItemId = '';
   let lastWakeSyncAt = 0;
 
   const editModal = document.getElementById('editModal');
@@ -323,6 +329,49 @@
       }, 1500);
     }
     showToast('📋 Đã sao chép vào Clipboard!');
+  }
+
+  async function copyImageToClipboard(id, buttonEl) {
+    if (!id) return;
+    const item = items.find((i) => i.id === id);
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    try {
+      let blob = null;
+      if (isCloud && window.QSHCloud && typeof window.QSHCloud.getFileBlob === 'function') {
+        blob = await window.QSHCloud.getFileBlob(id);
+      } else {
+        const res = await fetch(`/api/files/${encodeURIComponent(id)}/download`);
+        if (res && res.ok && typeof res.blob === 'function') {
+          blob = await res.blob();
+        }
+      }
+      if (!blob) {
+        throw new Error('Image blob unavailable');
+      }
+      const mime = (blob && blob.type) || (item && (item.mimeType || item.mime_type)) || 'image/png';
+      const typedBlob = (blob && blob.type) ? blob : new Blob([blob], { type: mime });
+      const Ctor = (typeof ClipboardItem === 'function')
+        ? ClipboardItem
+        : (window && typeof window.ClipboardItem === 'function' ? window.ClipboardItem : null);
+      if (navigator.clipboard && typeof navigator.clipboard.write === 'function' && Ctor) {
+        await navigator.clipboard.write([new Ctor({ [typedBlob.type || 'image/png']: typedBlob })]);
+        if (buttonEl) {
+          const original = buttonEl.innerHTML;
+          buttonEl.innerHTML = '✅ Đã copy ảnh!';
+          setTimeout(() => {
+            buttonEl.innerHTML = original;
+          }, 1500);
+        }
+        showToast('🖼️ Đã sao chép ảnh vào Clipboard! (Nhấn Ctrl+V để dán)');
+        return;
+      }
+    } catch (_) {}
+
+    const shareOrigin = getShareOrigin();
+    const fallbackUrl = isCloud
+      ? `${shareOrigin}/?room=${encodeURIComponent(currentRoom)}&preview=${encodeURIComponent(id)}`
+      : `${shareOrigin}/api/files/${encodeURIComponent(id)}/preview`;
+    await copyToClipboard(fallbackUrl, buttonEl);
   }
 
   // API Calls
@@ -793,6 +842,53 @@
   }
 
   // Render UI
+  function getItemSortSize(item) {
+    const fSize = item.fileSize ?? item.file_size;
+    if (typeof fSize === 'number' && Number.isFinite(fSize) && fSize >= 0) {
+      return fSize;
+    }
+    return String(item.content || '').length;
+  }
+
+  function compareItemsBySortOrder(a, b, order) {
+    const pinA = a.pinned ? 1 : 0;
+    const pinB = b.pinned ? 1 : 0;
+    if (pinA !== pinB) return pinB - pinA;
+
+    const timeA = a.createdAt || a.created_at || 0;
+    const timeB = b.createdAt || b.created_at || 0;
+
+    if (order === 'oldest') {
+      if (timeA !== timeB) return timeA - timeB;
+      return 0;
+    }
+    if (order === 'expiring') {
+      const expA = a.expiresAt ?? a.expires_at;
+      const expB = b.expiresAt ?? b.expires_at;
+      const hasExpA = typeof expA === 'number' && Number.isFinite(expA) && expA > 0;
+      const hasExpB = typeof expB === 'number' && Number.isFinite(expB) && expB > 0;
+      if (hasExpA && hasExpB) {
+        if (expA !== expB) return expA - expB;
+      } else if (hasExpA !== hasExpB) {
+        return hasExpA ? -1 : 1;
+      }
+      return timeB - timeA;
+    }
+    if (order === 'size_desc') {
+      const sizeDiff = getItemSortSize(b) - getItemSortSize(a);
+      if (sizeDiff !== 0) return sizeDiff;
+      return timeB - timeA;
+    }
+    if (order === 'title_asc') {
+      const labelA = String(a.fileName || a.file_name || a.title || a.content || '').trim();
+      const labelB = String(b.fileName || b.file_name || b.title || b.content || '').trim();
+      const cmp = labelA.localeCompare(labelB, 'vi', { numeric: true, sensitivity: 'base' });
+      if (cmp !== 0) return cmp;
+      return timeB - timeA;
+    }
+    return timeB - timeA;
+  }
+
   function renderItems() {
     const now = Date.now();
     // Filter out expired items client-side too, and sort pinned items first
@@ -801,12 +897,7 @@
         const exp = item.expiresAt ?? item.expires_at;
         return !exp || exp > now;
       })
-      .sort((a, b) => {
-        const pinA = a.pinned ? 1 : 0;
-        const pinB = b.pinned ? 1 : 0;
-        if (pinA !== pinB) return pinB - pinA;
-        return ((b.createdAt || b.created_at || 0) - (a.createdAt || a.created_at || 0));
-      });
+      .sort((a, b) => compareItemsBySortOrder(a, b, 'newest'));
 
     if (items.length === 0 && clearRoomConfirmArmed) {
       resetClearRoomConfirm();
@@ -821,19 +912,21 @@
     countNote.textContent = items.filter((i) => i.type === 'note').length;
     countFile.textContent = items.filter((i) => i.type === 'file').length;
 
-    const filtered = items.filter((item) => {
-      if (activeFilter === 'pinned') {
-        if (!item.pinned) return false;
-      } else if (activeFilter !== 'all' && item.type !== activeFilter) {
-        return false;
-      }
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        const hay = `${item.title || ''} ${item.content || ''} ${item.fileName || item.file_name || ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+    const filtered = items
+      .filter((item) => {
+        if (activeFilter === 'pinned') {
+          if (!item.pinned) return false;
+        } else if (activeFilter !== 'all' && item.type !== activeFilter) {
+          return false;
+        }
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          const hay = `${item.title || ''} ${item.content || ''} ${item.fileName || item.file_name || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => compareItemsBySortOrder(a, b, sortOrder));
 
     if (filtered.length === 0) {
       if (items.length > 0) {
@@ -961,9 +1054,21 @@
         </div>
       `;
     } else if (item.type === 'note') {
+      const rawNote = String(item.content || '');
+      const noteLineCount = rawNote ? rawNote.split(/\r?\n/).length : 1;
+      const isLongNote = rawNote.length > 900 || noteLineCount > 14;
+      const isNoteExpanded = expandedNoteIds.has(item.id);
+      const notePreClass = isLongNote
+        ? (isNoteExpanded ? 'item-note-pre expanded' : 'item-note-pre collapsed')
+        : 'item-note-pre';
       bodyHtml = `
         <div class="item-body">
-          <pre class="item-note-pre">${renderNoteContentWithLinks(item.content)}</pre>
+          <pre class="${notePreClass}" data-note-id="${escapeHtml(item.id)}">${renderNoteContentWithLinks(item.content)}</pre>
+          ${isLongNote ? `
+            <button type="button" class="btn btn-sm note-expand-btn js-toggle-note-expand" data-id="${escapeHtml(item.id)}" data-lines="${noteLineCount}">
+              ${isNoteExpanded ? '🔼 Thu gọn' : `🔽 Xem thêm (${noteLineCount} dòng)`}
+            </button>
+          ` : ''}
         </div>
       `;
     } else if (item.type === 'file') {
@@ -980,7 +1085,7 @@
             </div>
           </div>
           ${hasCaption ? `<div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap;">${renderNoteContentWithLinks(item.content)}</div>` : ''}
-          ${isImage ? `<img src="${isCloud ? '' : localPreviewUrl}" data-cloud-image-id="${escapeHtml(item.id)}" alt="${escapeHtml(fileName)}" class="item-image-preview" loading="lazy" />` : ''}
+          ${isImage ? `<img src="${isCloud ? TRANSPARENT_PIXEL : localPreviewUrl}" data-cloud-image-id="${escapeHtml(item.id)}" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" alt="${escapeHtml(fileName)}" title="Bấm để xem ảnh lớn (${escapeHtml(fileName)})" class="item-image-preview" loading="lazy" />` : ''}
         </div>
       `;
     }
@@ -1007,6 +1112,12 @@
           <button type="button" class="btn btn-sm js-copy-btn" data-copy="${escapeHtml(copyTarget)}">
             📋 Copy ${item.type === 'file' ? 'Link Tải' : ''}
           </button>
+
+          ${isImage ? `
+            <button type="button" class="btn btn-sm js-copy-image-btn" data-id="${escapeHtml(item.id)}" title="Sao chép hình ảnh trực tiếp vào Clipboard để dán (Ctrl+V) vào Word, Zalo, Docs...">
+              🖼️ Copy Ảnh
+            </button>
+          ` : ''}
 
           ${item.type === 'link' ? `
             <a href="${escapeHtml(safeLinkHref)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary">
@@ -1141,7 +1252,7 @@
     currentQrDataUrl = '';
     qrModalTitle.textContent = title ? `📱 Mã QR: ${title}` : '📱 Quét mã QR trên Điện thoại';
     qrCaption.textContent = text;
-    qrImage.src = '';
+    qrImage.src = TRANSPARENT_PIXEL;
     qrModal.classList.add('open');
 
     try {
@@ -1158,7 +1269,7 @@
 
   function downloadQrCodePng() {
     const srcUrl = currentQrDataUrl || (qrImage && qrImage.src) || '';
-    if (!srcUrl || !String(srcUrl).startsWith('data:image/')) {
+    if (!srcUrl || srcUrl === TRANSPARENT_PIXEL || !String(srcUrl).startsWith('data:image/')) {
       showToast('⚠️ Mã QR chưa sẵn sàng để tải xuống');
       return;
     }
@@ -1183,9 +1294,12 @@
     if (!pdfModal) return;
     pdfModal.classList.remove('open');
     if (pdfViewerFrame) pdfViewerFrame.src = 'about:blank';
-    if (modalImagePreview) modalImagePreview.src = '';
+    if (modalImagePreview) modalImagePreview.src = TRANSPARENT_PIXEL;
     if (modalTextPreview) modalTextPreview.textContent = '';
+    if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
+    if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
     currentModalTextContent = '';
+    currentModalItemId = '';
   }
 
   function closeAllModals() {
@@ -1199,6 +1313,7 @@
   }
 
   async function openPdfPreviewModal(id, fileName) {
+    currentModalItemId = id || '';
     const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
     let previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
     let downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
@@ -1242,6 +1357,7 @@
 
     if (isImage) {
       pdfModalTitle.textContent = `🖼️ ${resolvedName}`;
+      if (copyModalImageBtn) copyModalImageBtn.style.display = 'inline-flex';
       if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
       if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
       pdfViewerFrame.style.display = 'none';
@@ -1258,6 +1374,7 @@
 
     if (isText) {
       pdfModalTitle.textContent = `📝 ${resolvedName}`;
+      if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
       if (copyModalTextBtn) copyModalTextBtn.style.display = 'inline-flex';
       if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
       pdfViewerFrame.style.display = 'none';
@@ -1291,6 +1408,7 @@
 
     // Default: PDF / Document iframe preview
     pdfModalTitle.textContent = `📄 ${resolvedName}`;
+    if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
     if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
     if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
     if (textPreviewContainer) textPreviewContainer.style.display = 'none';
@@ -1666,8 +1784,10 @@
     const resetFilterBtn = e.target.closest('.js-reset-filter-btn');
     if (resetFilterBtn) {
       activeFilter = 'all';
+      sortOrder = 'newest';
       searchQuery = '';
       if (searchInput) searchInput.value = '';
+      if (sortOrderSelect) sortOrderSelect.value = 'newest';
       filterTabs.forEach((t) => {
         if ((t.getAttribute('data-filter') || 'all') === 'all') {
           t.classList.add('active');
@@ -1688,9 +1808,29 @@
       return;
     }
 
+    const toggleNoteBtn = e.target.closest('.js-toggle-note-expand');
+    if (toggleNoteBtn) {
+      const noteId = toggleNoteBtn.getAttribute('data-id');
+      if (noteId) {
+        if (expandedNoteIds.has(noteId)) {
+          expandedNoteIds.delete(noteId);
+        } else {
+          expandedNoteIds.add(noteId);
+        }
+        renderItems();
+      }
+      return;
+    }
+
     const copyCodeBtn = e.target.closest('.js-copy-code-btn');
     if (copyCodeBtn) {
       copyToClipboard(copyCodeBtn.getAttribute('data-code') || '', copyCodeBtn);
+      return;
+    }
+
+    const copyImgBtn = e.target.closest('.js-copy-image-btn');
+    if (copyImgBtn) {
+      copyImageToClipboard(copyImgBtn.getAttribute('data-id'), copyImgBtn);
       return;
     }
 
@@ -1736,6 +1876,15 @@
       return;
     }
 
+    const imgThumb = e.target.closest('.item-image-preview');
+    if (imgThumb) {
+      openPdfPreviewModal(
+        imgThumb.getAttribute('data-id') || imgThumb.getAttribute('data-cloud-image-id'),
+        imgThumb.getAttribute('data-name') || imgThumb.getAttribute('alt')
+      );
+      return;
+    }
+
     const dlBtn = e.target.closest('.js-download-file-btn');
     if (dlBtn && window.QSHCloud && window.QSHCloud.isCloudMode()) {
       e.preventDefault();
@@ -1774,6 +1923,13 @@
       if (tab) {
         activateFilterTab(tab.getAttribute('data-filter') || 'all', tab);
       }
+    });
+  }
+
+  if (sortOrderSelect) {
+    sortOrderSelect.addEventListener('change', () => {
+      sortOrder = sortOrderSelect.value || 'newest';
+      renderItems();
     });
   }
 
@@ -1876,6 +2032,14 @@
   if (downloadQrImgBtn) {
     downloadQrImgBtn.addEventListener('click', () => {
       downloadQrCodePng();
+    });
+  }
+
+  if (copyModalImageBtn) {
+    copyModalImageBtn.addEventListener('click', () => {
+      if (currentModalItemId) {
+        copyImageToClipboard(currentModalItemId, copyModalImageBtn);
+      }
     });
   }
 

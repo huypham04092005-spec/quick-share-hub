@@ -990,3 +990,58 @@ body {
   white-space: pre;
   overflow-x: auto;
 }
+
+.feed-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sort-select {
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.sort-select:focus,
+.sort-select:hover {
+  border-color: var(--accent-blue);
+}
+
+.item-image-preview {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.item-image-preview:hover {
+  border-color: var(--accent-blue);
+}
+
+.item-note-pre.collapsed {
+  max-height: 260px;
+  overflow-y: hidden;
+  position: relative;
+}
+
+.item-note-pre.expanded {
+  max-height: none;
+  overflow-y: visible;
+}
+
+.note-expand-btn {
+  margin-top: 6px;
+  font-size: 0.76rem;
+  padding: 4px 10px;
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(30, 41, 59, 0.75);
+}
+
