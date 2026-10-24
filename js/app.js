@@ -43,6 +43,8 @@
   // Storage & Bandwidth Dashboard Elements
   const telemetryDashboard = document.getElementById('telemetryDashboard');
   const telemetryToggleBtn = document.getElementById('telemetryToggleBtn');
+  const syncCloudNowBtn = document.getElementById('syncCloudNowBtn');
+  const exportRoomBtn = document.getElementById('exportRoomBtn');
   const cleanupStorageBtn = document.getElementById('cleanupStorageBtn');
   const resetBandwidthBtn = document.getElementById('resetBandwidthBtn');
   const statStoragePercent = document.getElementById('statStoragePercent');
@@ -55,6 +57,7 @@
   const statBandwidthQuota = document.getElementById('statBandwidthQuota');
   const bandwidthQuotaBar = document.getElementById('bandwidthQuotaBar');
   const statBandwidthSplit = document.getElementById('statBandwidthSplit');
+  const statLiveSpeedBadge = document.getElementById('statLiveSpeedBadge');
   const statPageFootprint = document.getElementById('statPageFootprint');
   const statNetworkRequests = document.getElementById('statNetworkRequests');
   const statTransferBreakdown = document.getElementById('statTransferBreakdown');
@@ -343,6 +346,78 @@
     }
   }
 
+  async function togglePinItem(id) {
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(id)}/pin`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.item) {
+        upsertItemInState(data.item);
+        showToast(data.item.pinned ? '📌 Đã ghim mục lên đầu phòng!' : '📍 Đã bỏ ghim mục');
+      }
+    } catch (_) {
+      showToast('❌ Không thể thay đổi trạng thái ghim');
+    }
+  }
+
+  function downloadNoteAsTxt(id) {
+    const item = items.find((i) => i.id === id);
+    if (!item) return;
+    const blob = new Blob([String(item.content || '')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const safeTitle = String(item.title || 'ghi-chu').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || 'note';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeTitle}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`💾 Đã tải xuống ${safeTitle}.txt`);
+  }
+
+  async function forceSyncFromCloud() {
+    if (syncCloudNowBtn) syncCloudNowBtn.disabled = true;
+    try {
+      const res = await fetch(`/api/items?room=${encodeURIComponent(currentRoom)}&sync=1`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.items)) {
+        items = data.items;
+        renderItems();
+        showToast('☁️ Đã đồng bộ dữ liệu mới nhất từ Cloud 24/7!');
+      }
+    } catch (_) {
+      showToast('❌ Không thể đồng bộ từ Cloud');
+    } finally {
+      if (syncCloudNowBtn) syncCloudNowBtn.disabled = false;
+    }
+  }
+
+  function exportRoomBackupJson() {
+    const snap = (window.QSHCloud && typeof window.QSHCloud.getTelemetrySnapshot === 'function')
+      ? window.QSHCloud.getTelemetrySnapshot(currentRoom, items)
+      : null;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      cloudPlatform: 'Quick Share Hub 24/7 Cloud',
+      room: currentRoom,
+      itemCount: items.length,
+      telemetry: snap,
+      items
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quick-share-hub-${currentRoom}-backup.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`📥 Đã xuất file backup phòng "${currentRoom}" (.json)!`);
+  }
+
   // State Manipulation
   function upsertItemInState(newItem) {
     const idx = items.findIndex((i) => i.id === newItem.id);
@@ -362,11 +437,18 @@
   // Render UI
   function renderItems() {
     const now = Date.now();
-    // Filter out expired items client-side too
-    items = items.filter((item) => {
-      const exp = item.expiresAt ?? item.expires_at;
-      return !exp || exp > now;
-    });
+    // Filter out expired items client-side too, and sort pinned items first
+    items = items
+      .filter((item) => {
+        const exp = item.expiresAt ?? item.expires_at;
+        return !exp || exp > now;
+      })
+      .sort((a, b) => {
+        const pinA = a.pinned ? 1 : 0;
+        const pinB = b.pinned ? 1 : 0;
+        if (pinA !== pinB) return pinB - pinA;
+        return ((b.createdAt || b.created_at || 0) - (a.createdAt || a.created_at || 0));
+      });
 
     // Update counts
     countAll.textContent = items.length;
@@ -424,6 +506,9 @@
     bandwidthQuotaBar.style.width = `${Math.max(1.5, Math.min(100, bandwidth.percentUsed))}%`;
     statBandwidthSplit.textContent = `⬆ Tải lên: ${formatBytes(bandwidth.uploadBytes)} • ⬇ Tải xuống: ${formatBytes(bandwidth.downloadBytes)}`;
 
+    if (statLiveSpeedBadge) {
+      statLiveSpeedBadge.textContent = `Ping: ${bandwidth.latencyMs || 42}ms • 24/7 Cloud`;
+    }
     statPageFootprint.textContent = formatBytes(storage.pageFootprintBytes);
     statNetworkRequests.textContent = `${bandwidth.apiRequests} API Requests • ${bandwidth.wsEvents} Sự kiện Realtime WS`;
     statTransferBreakdown.textContent = `Tài nguyên trang (${bandwidth.resourceCount} files HTML/CSS/JS/PWA): ${formatBytes(storage.pageFootprintBytes)}`;
@@ -513,11 +598,13 @@
     const copyTarget = item.type === 'file' ? downloadUrl : (item.content || '');
     const qrTarget = item.type === 'file' ? previewUrl : (item.content || '');
     const safeLinkHref = item.type === 'link' ? sanitizeUrl(item.content) : '#';
+    const isPinned = Boolean(item.pinned);
 
     return `
-      <article class="item-card" data-id="${escapeHtml(item.id)}">
+      <article class="item-card ${isPinned ? 'pinned' : ''}" data-id="${escapeHtml(item.id)}">
         <div class="item-top">
           <div class="item-meta">
+            ${isPinned ? '<span class="pin-badge">📌 Đã ghim</span>' : ''}
             <span class="type-badge ${badgeClass}">${badgeLabel}</span>
             <span class="time-badge">🕒 ${formatRelativeTime(createdAt)}</span>
             <span class="ttl-badge" title="Thời gian tự động xóa">⏳ ${formatRemainingTtl(expiresAt)}</span>
@@ -537,6 +624,12 @@
             </a>
           ` : ''}
 
+          ${item.type === 'note' ? `
+            <button type="button" class="btn btn-sm js-download-note-btn" data-id="${escapeHtml(item.id)}" title="Tải ghi chú về máy dưới dạng file .txt">
+              💾 Tải .txt
+            </button>
+          ` : ''}
+
           ${canPreviewModal ? `
             <button type="button" class="btn btn-sm btn-primary js-preview-pdf-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}">
               👁️ Xem trước ${isPdf ? 'PDF' : ''}
@@ -551,6 +644,10 @@
 
           <button type="button" class="btn btn-sm js-qr-btn" data-qr="${escapeHtml(qrTarget)}" data-title="${escapeHtml(item.title || fileName)}">
             📱 Mã QR
+          </button>
+
+          <button type="button" class="btn btn-sm js-pin-btn" data-id="${escapeHtml(item.id)}" title="${isPinned ? 'Bỏ ghim mục này' : 'Ghim mục này lên đầu phòng'}">
+            ${isPinned ? '📍 Bỏ ghim' : '📌 Ghim'}
           </button>
 
           <button type="button" class="btn btn-sm btn-danger js-delete-btn" data-id="${escapeHtml(item.id)}" style="margin-left: auto;">
@@ -650,7 +747,7 @@
           window.QSHCloud.recordTraffic({ downloadBytes: byteLen, wsEvents: 1 });
         }
         const msg = JSON.parse(event.data);
-        if (msg.type === 'item_created' && msg.item) {
+        if ((msg.type === 'item_created' || msg.type === 'item_pinned') && msg.item) {
           if ((msg.item.room || 'default') === currentRoom) {
             upsertItemInState(msg.item);
           }
@@ -812,6 +909,18 @@
       return;
     }
 
+    const pinBtn = e.target.closest('.js-pin-btn');
+    if (pinBtn) {
+      togglePinItem(pinBtn.getAttribute('data-id'));
+      return;
+    }
+
+    const noteDlBtn = e.target.closest('.js-download-note-btn');
+    if (noteDlBtn) {
+      downloadNoteAsTxt(noteDlBtn.getAttribute('data-id'));
+      return;
+    }
+
     const pdfBtn = e.target.closest('.js-preview-pdf-btn');
     if (pdfBtn) {
       openPdfPreviewModal(pdfBtn.getAttribute('data-id'), pdfBtn.getAttribute('data-name'));
@@ -851,6 +960,18 @@
     telemetryToggleBtn.addEventListener('click', () => {
       telemetryDashboard.classList.toggle('collapsed');
       updateTelemetryDashboard();
+    });
+  }
+
+  if (syncCloudNowBtn) {
+    syncCloudNowBtn.addEventListener('click', () => {
+      forceSyncFromCloud();
+    });
+  }
+
+  if (exportRoomBtn) {
+    exportRoomBtn.addEventListener('click', () => {
+      exportRoomBackupJson();
     });
   }
 

@@ -56,6 +56,12 @@
           <span id="cloudPlatformBadge" class="cloud-badge-247">☁️ Cloud 24/7 Active (Chạy độc lập khi tắt PC)</span>
         </div>
         <div class="telemetry-actions">
+          <button id="syncCloudNowBtn" type="button" class="btn btn-sm" title="Đồng bộ tức thì dữ liệu mới nhất từ Cloud Gist 24/7">
+            ☁️ Đồng bộ Cloud
+          </button>
+          <button id="exportRoomBtn" type="button" class="btn btn-sm" title="Xuất toàn bộ dữ liệu phòng và báo cáo băng thông ra file JSON">
+            📥 Xuất Backup JSON
+          </button>
           <button id="cleanupStorageBtn" type="button" class="btn btn-sm" title="Dọn dẹp các mục đã hết hạn để giải phóng dung lượng">
             🧹 Dọn mục hết hạn
           </button>
@@ -248,7 +254,7 @@
           <button id="closePdfModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
         </div>
       </div>
-      <iframe id="pdfViewerFrame" class="pdf-viewer-frame" title="PDF Preview"></iframe>
+      <iframe id="pdfViewerFrame" class="pdf-viewer-frame" title="PDF Preview" sandbox="allow-scripts allow-same-origin allow-downloads"></iframe>
     </div>
   </div>
 
