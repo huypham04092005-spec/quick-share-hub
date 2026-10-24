@@ -1283,3 +1283,49 @@ body {
 [data-theme="light"] .note-inline-link {
   color: #2563eb;
 }
+
+/* Inline Code Spans & Interactive Syncing Checklists inside Notes */
+.note-inline-code {
+  display: inline;
+  padding: 1px 6px;
+  margin: 0 1px;
+  border-radius: 5px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.82em;
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.32);
+}
+
+.note-task-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 1px 0;
+}
+
+.note-task-cb {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-emerald);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.note-task-text.note-task-done {
+  text-decoration: line-through;
+  color: var(--text-muted);
+  opacity: 0.82;
+}
+
+[data-theme="light"] .note-inline-code {
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+  border-color: rgba(37, 99, 235, 0.25);
+}
+
+[data-theme="light"] .note-task-text.note-task-done {
+  color: #64748b;
+}
+

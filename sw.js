@@ -1,5 +1,6 @@
 // public/sw.js
-const CACHE_NAME = 'quick-share-hub-v11-cloud'; // supersedes quick-share-hub-v10-cloud
+// History: const CACHE_NAME = 'quick-share-hub-v11-cloud'; // supersedes quick-share-hub-v10-cloud
+const CACHE_NAME = 'quick-share-hub-v12-cloud';
 const STATIC_ASSETS = [
   './',
   './index.html',

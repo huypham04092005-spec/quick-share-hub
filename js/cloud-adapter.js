@@ -861,6 +861,15 @@
       cloudState.deletedIds.add(payload.id);
       cloudState.files.delete(payload.id);
       cloudState.rooms.set(normalized, list.filter((i) => i.id !== payload.id));
+    } else if ((payload.type === 'items_deleted' || payload.type === 'items_expired') && Array.isArray(payload.ids)) {
+      const idSet = new Set(payload.ids);
+      for (const id of idSet) {
+        if (typeof id === 'string' && id) {
+          cloudState.deletedIds.add(id);
+          cloudState.files.delete(id);
+        }
+      }
+      cloudState.rooms.set(normalized, list.filter((i) => !idSet.has(i.id)));
     } else if (payload.type === 'room_cleared') {
       cloudState.clearedRoomsAt.set(normalized, Date.now());
       cloudState.rooms.set(normalized, []);
@@ -1249,6 +1258,90 @@
         success: true,
         room,
         deletedCount: ids.length
+      }, 200);
+    }
+
+    // 4b. POST /api/items/batch-delete
+    if (apiPath === '/api/items/batch-delete') {
+      if (upperMethod !== 'POST') {
+        return makeJsonResponse({ success: false, error: 'Method not allowed' }, 405);
+      }
+      let body = {};
+      try {
+        if (typeof init.body === 'string') {
+          body = JSON.parse(init.body);
+        } else if (init.body && typeof init.body === 'object') {
+          body = init.body;
+        }
+      } catch (_) {
+        return makeJsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
+      }
+      const rawIds = Array.isArray(body && body.ids) ? body.ids : [];
+      const validIds = Array.from(
+        new Set(
+          rawIds
+            .filter((id) => (typeof id === 'string' && id.trim()) || typeof id === 'number')
+            .map((id) => String(id).trim())
+        )
+      );
+      if (validIds.length === 0) {
+        return makeJsonResponse({
+          success: false,
+          error: 'ids must be a non-empty array of item IDs'
+        }, 400);
+      }
+
+      const rawRoom = (body && body.room) || urlObj.searchParams.get('room');
+      const targetRoom = (rawRoom && typeof rawRoom === 'string' && rawRoom.trim())
+        ? normalizeRoom(rawRoom)
+        : null;
+
+      const missingSome = validIds.some((id) => !findItemAcrossRooms(id, true) && !cloudState.deletedIds.has(id));
+      if (missingSome) {
+        await fetchCloudGistState(true);
+      }
+
+      const deletedItems = [];
+      const deletedIds = [];
+      const affectedRooms = new Map();
+
+      for (const id of validIds) {
+        const found = findItemAcrossRooms(id, true);
+        if (!found) continue;
+        if (targetRoom && found.room !== targetRoom) continue;
+        cloudState.deletedIds.add(id);
+        found.list.splice(found.idx, 1);
+        archiveCloudFileToTrash(found.item);
+        cloudState.files.delete(id);
+        deletedItems.push(found.item);
+        deletedIds.push(id);
+        if (!affectedRooms.has(found.room)) {
+          affectedRooms.set(found.room, []);
+        }
+        affectedRooms.get(found.room).push(id);
+      }
+
+      for (const item of deletedItems) {
+        if (item.fileGistId && !isFileRefReferencedInCloud(item.fileGistId)) {
+          deleteCloudFileGist(item.fileGistId);
+        }
+      }
+
+      for (const [r, roomIds] of affectedRooms.entries()) {
+        scheduleRoomGistFlush(r);
+        broadcastRoomEvent(r, {
+          type: 'items_deleted',
+          room: r,
+          ids: roomIds,
+          count: roomIds.length
+        });
+      }
+
+      return makeJsonResponse({
+        success: true,
+        deletedCount: deletedIds.length,
+        deletedIds,
+        ids: deletedIds
       }, 200);
     }
 

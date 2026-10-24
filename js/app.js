@@ -11,6 +11,7 @@
   let searchQuery = '';
   const expandedNoteIds = new Set();
   const selectedItemIds = new Set();
+  let lastClickedCheckboxId = null;
   const THEME_STORAGE_KEY = 'qsh_theme';
   let currentTheme = 'dark';
   let ws = null;
@@ -50,6 +51,7 @@
   const batchSelectedCount = document.getElementById('batchSelectedCount');
   const batchSelectAllBtn = document.getElementById('batchSelectAllBtn');
   const batchCopySelectedBtn = document.getElementById('batchCopySelectedBtn');
+  const batchExportSelectedBtn = document.getElementById('batchExportSelectedBtn');
   const batchDeleteSelectedBtn = document.getElementById('batchDeleteSelectedBtn');
   const batchClearSelectionBtn = document.getElementById('batchClearSelectionBtn');
   const itemsContainer = document.getElementById('itemsContainer');
@@ -129,6 +131,7 @@
   const roomNameInput = document.getElementById('roomNameInput');
   const recentRoomsList = document.getElementById('recentRoomsList');
   const closeRoomModalBtn = document.getElementById('closeRoomModalBtn');
+  const copyRoomLinkBtn = document.getElementById('copyRoomLinkBtn');
   const resetDefaultRoomBtn = document.getElementById('resetDefaultRoomBtn');
   const confirmRoomBtn = document.getElementById('confirmRoomBtn');
 
@@ -195,12 +198,15 @@
     return window.location.origin;
   }
 
-  function getShareRoomUrl() {
+  function getShareRoomUrl(roomOverride) {
     const base = getShareOrigin();
-    if (currentRoom === 'default') {
+    const targetRoom = (roomOverride && typeof roomOverride === 'string' && roomOverride.trim())
+      ? roomOverride.trim().toLowerCase()
+      : currentRoom;
+    if (targetRoom === 'default') {
       return `${base}/`;
     }
-    return `${base}/?room=${encodeURIComponent(currentRoom)}`;
+    return `${base}/?room=${encodeURIComponent(targetRoom)}`;
   }
 
   function sanitizeUrl(rawUrl) {
@@ -329,7 +335,50 @@
     return result;
   }
 
-  function renderNoteContentWithLinks(rawText) {
+  function renderInlineCodeAndLinks(lineText) {
+    if (!lineText) return '';
+    const str = String(lineText);
+    const inlineCodeRegex = /(?<!`)`([^`\r\n]+)`(?!`)/g;
+    let result = '';
+    let lastIdx = 0;
+    let match;
+    while ((match = inlineCodeRegex.exec(str)) !== null) {
+      if (match.index > lastIdx) {
+        result += renderPlainTextWithLinks(str.slice(lastIdx, match.index));
+      }
+      result += `<code class="note-inline-code">${escapeHtml(match[1])}</code>`;
+      lastIdx = match.index + match[0].length;
+    }
+    if (lastIdx < str.length) {
+      result += renderPlainTextWithLinks(str.slice(lastIdx));
+    }
+    return result;
+  }
+
+  function renderNonFencedSegment(segmentText, baseLineIdx, isAtLineStart, itemId) {
+    if (!segmentText) return '';
+    const lines = String(segmentText).split('\n');
+    return lines.map((rawLine, idx) => {
+      const hasCr = rawLine.endsWith('\r');
+      const line = hasCr ? rawLine.slice(0, -1) : rawLine;
+      const crSuffix = hasCr ? '\r' : '';
+      const lineIdx = baseLineIdx + idx;
+      const canMatchTask = idx > 0 || isAtLineStart;
+      if (canMatchTask) {
+        const taskMatch = line.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
+        if (taskMatch) {
+          const indent = (taskMatch[1].match(/^\s*/) || [''])[0];
+          const isChecked = taskMatch[2].toLowerCase() === 'x';
+          const taskBody = (taskMatch[3] || '').replace(/^\s+/, '');
+          const renderedBody = renderInlineCodeAndLinks(taskBody);
+          return `${escapeHtml(indent)}<div class="note-task-row ${isChecked ? 'note-task-done' : ''}"><input type="checkbox" class="note-task-cb js-note-task-cb" data-id="${escapeHtml(itemId || '')}" data-line="${lineIdx}" ${isChecked ? 'checked' : ''} /><span class="note-task-text ${isChecked ? 'note-task-done' : ''}">${renderedBody}</span></div>${crSuffix}`;
+        }
+      }
+      return renderInlineCodeAndLinks(line) + crSuffix;
+    }).join('\n');
+  }
+
+  function renderNoteContentWithLinks(rawText, itemId = '') {
     if (!rawText) return '';
     const str = String(rawText);
     const fenceRegex = /(`{3,})(?:([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)|[ \t]*([^\r\n`]+?)[ \t]*)\1(?!`)/g;
@@ -338,7 +387,9 @@
     let match;
     while ((match = fenceRegex.exec(str)) !== null) {
       if (match.index > lastIdx) {
-        result += renderPlainTextWithLinks(str.slice(lastIdx, match.index));
+        const baseLineIdx = lastIdx === 0 ? 0 : (str.slice(0, lastIdx).match(/\n/g) || []).length;
+        const isAtLineStart = lastIdx === 0 || str[lastIdx - 1] === '\n';
+        result += renderNonFencedSegment(str.slice(lastIdx, match.index), baseLineIdx, isAtLineStart, itemId);
       }
       const isMultiLine = match[3] !== undefined;
       const lang = isMultiLine ? ((match[2] || '').trim() || 'code') : 'code';
@@ -347,7 +398,9 @@
       lastIdx = match.index + match[0].length;
     }
     if (lastIdx < str.length) {
-      result += renderPlainTextWithLinks(str.slice(lastIdx));
+      const baseLineIdx = lastIdx === 0 ? 0 : (str.slice(0, lastIdx).match(/\n/g) || []).length;
+      const isAtLineStart = lastIdx === 0 || str[lastIdx - 1] === '\n';
+      result += renderNonFencedSegment(str.slice(lastIdx), baseLineIdx, isAtLineStart, itemId);
     }
     return result;
   }
@@ -750,6 +803,46 @@
     }
   }
 
+  async function toggleNoteTaskLine(itemId, lineIdx) {
+    const parsedIdx = Number(lineIdx);
+    if (!itemId || !Number.isFinite(parsedIdx) || parsedIdx < 0) return;
+    const item = items.find((i) => i.id === itemId);
+    if (!item || typeof item.content !== 'string') return;
+    const prevContent = item.content;
+    const lines = prevContent.split(/\r?\n/);
+    if (parsedIdx >= lines.length) return;
+    const targetLine = lines[parsedIdx];
+    const m = targetLine.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
+    if (!m) return;
+    const isChecked = m[2].toLowerCase() === 'x';
+    const nextMark = isChecked ? ' ' : 'x';
+    lines[parsedIdx] = `${m[1]}[${nextMark}]${m[3]}`;
+    const updatedContent = lines.join('\n');
+
+    item.content = updatedContent;
+    renderItems();
+
+    try {
+      const res = await fetch(`/api/items/${encodeURIComponent(itemId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: updatedContent })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.item) {
+        upsertItemInState(data.item);
+      } else {
+        item.content = prevContent;
+        renderItems();
+        showToast('❌ ' + (data.error || 'Không thể cập nhật checklist'));
+      }
+    } catch (_) {
+      item.content = prevContent;
+      renderItems();
+      showToast('❌ Lỗi kết nối khi đồng bộ checklist');
+    }
+  }
+
   function downloadNoteAsTxt(id) {
     const item = items.find((i) => i.id === id);
     if (!item) return;
@@ -990,6 +1083,9 @@
     items = items.filter((i) => i.id !== id);
     expandedNoteIds.delete(id);
     selectedItemIds.delete(id);
+    if (lastClickedCheckboxId === id) {
+      lastClickedCheckboxId = null;
+    }
     renderItems();
   }
 
@@ -1090,6 +1186,7 @@
     if (visible.length === 0) {
       if (selectedItemIds.size > 0) {
         selectedItemIds.clear();
+        lastClickedCheckboxId = null;
         renderItems();
       }
       return;
@@ -1097,18 +1194,23 @@
     const allVisibleSelected = visible.every((i) => selectedItemIds.has(i.id));
     if (allVisibleSelected) {
       selectedItemIds.clear();
+      lastClickedCheckboxId = null;
     } else {
       visible.forEach((i) => selectedItemIds.add(i.id));
     }
     renderItems();
   }
 
-  async function batchCopySelectedItems() {
-    if (selectedItemIds.size === 0) return;
+  function getSelectedItemsInDisplayOrder() {
+    if (selectedItemIds.size === 0) return [];
     const visibleOrder = getFilteredSortedItems().filter((i) => selectedItemIds.has(i.id));
     const visibleSet = new Set(visibleOrder.map((i) => i.id));
     const hiddenSelected = items.filter((i) => selectedItemIds.has(i.id) && !visibleSet.has(i.id));
-    const selectedList = [...visibleOrder, ...hiddenSelected];
+    return [...visibleOrder, ...hiddenSelected];
+  }
+
+  async function batchCopySelectedItems() {
+    const selectedList = getSelectedItemsInDisplayOrder();
     if (selectedList.length === 0) return;
 
     const shareOrigin = getShareOrigin();
@@ -1125,27 +1227,72 @@
     await copyToClipboard(combinedText, batchCopySelectedBtn, `📋 Đã sao chép ${selectedList.length} mục đã chọn!`);
   }
 
+  function batchExportSelectedItems() {
+    const selectedList = getSelectedItemsInDisplayOrder();
+    if (selectedList.length === 0) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      cloudPlatform: 'Quick Share Hub 24/7 Cloud',
+      room: currentRoom,
+      selectionExport: true,
+      itemCount: selectedList.length,
+      items: selectedList
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quick-share-hub-${currentRoom}-selected-${selectedList.length}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(`📥 Đã xuất ${selectedList.length} mục đã chọn (.json)!`);
+  }
+
   async function batchDeleteSelectedItems() {
     const idsToDelete = Array.from(selectedItemIds);
     if (idsToDelete.length === 0) return;
     if (batchDeleteSelectedBtn) batchDeleteSelectedBtn.disabled = true;
     let deletedCount = 0;
     try {
-      for (const id of idsToDelete) {
-        try {
-          const res = await fetch(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' });
-          if (res.ok) {
-            items = items.filter((i) => i.id !== id);
-            expandedNoteIds.delete(id);
-            selectedItemIds.delete(id);
-            deletedCount++;
-          }
-        } catch (_) {}
+      const res = await fetch('/api/items/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room: currentRoom, ids: idsToDelete })
+      });
+      if (res && res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch (_) {}
+        const removedSet = new Set(Array.isArray(data.deletedIds) ? data.deletedIds : idsToDelete);
+        for (const id of idsToDelete) removedSet.add(id);
+        items = items.filter((i) => !removedSet.has(i.id));
+        for (const id of removedSet) {
+          expandedNoteIds.delete(id);
+          selectedItemIds.delete(id);
+        }
+        lastClickedCheckboxId = null;
+        deletedCount = typeof data.deletedCount === 'number' ? data.deletedCount : idsToDelete.length;
+      } else {
+        for (const id of idsToDelete) {
+          try {
+            const delRes = await fetch(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            if (delRes.ok) {
+              items = items.filter((i) => i.id !== id);
+              expandedNoteIds.delete(id);
+              selectedItemIds.delete(id);
+              deletedCount++;
+            }
+          } catch (_) {}
+        }
+        lastClickedCheckboxId = null;
       }
       renderItems();
       if (deletedCount > 0) {
         showToast(`🗑️ Đã xóa ${deletedCount} mục đã chọn!`);
       }
+    } catch (_) {
+      showToast('❌ Lỗi khi xóa các mục đã chọn');
     } finally {
       if (batchDeleteSelectedBtn) batchDeleteSelectedBtn.disabled = false;
     }
@@ -1321,7 +1468,7 @@
         : 'item-note-pre';
       bodyHtml = `
         <div class="item-body">
-          <pre class="${notePreClass}" data-note-id="${escapeHtml(item.id)}">${renderNoteContentWithLinks(item.content)}</pre>
+          <pre class="${notePreClass}" data-note-id="${escapeHtml(item.id)}">${renderNoteContentWithLinks(item.content, item.id)}</pre>
           ${isLongNote ? `
             <button type="button" class="btn btn-sm note-expand-btn js-toggle-note-expand" data-id="${escapeHtml(item.id)}" data-lines="${noteLineCount}">
               ${isNoteExpanded ? '🔼 Thu gọn' : `🔽 Xem thêm (${noteLineCount} dòng)`}
@@ -1342,7 +1489,7 @@
               </div>
             </div>
           </div>
-          ${hasCaption ? `<div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap;">${renderNoteContentWithLinks(item.content)}</div>` : ''}
+          ${hasCaption ? `<div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap;">${renderNoteContentWithLinks(item.content, item.id)}</div>` : ''}
           ${isImage ? `<img src="${isCloud ? TRANSPARENT_PIXEL : localPreviewUrl}" data-cloud-image-id="${escapeHtml(item.id)}" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" alt="${escapeHtml(fileName)}" title="Bấm để xem ảnh lớn (${escapeHtml(fileName)})" class="item-image-preview" loading="lazy" />` : ''}
         </div>
       `;
@@ -1731,13 +1878,14 @@
           }
         } else if (msg.type === 'item_deleted' && msg.id) {
           removeItemFromState(msg.id);
-        } else if (msg.type === 'items_expired' && Array.isArray(msg.ids)) {
+        } else if ((msg.type === 'items_expired' || msg.type === 'items_deleted') && Array.isArray(msg.ids)) {
           msg.ids.forEach((id) => removeItemFromState(id));
         } else if (msg.type === 'room_cleared') {
           if (!msg.room || msg.room === currentRoom) {
             items = [];
             expandedNoteIds.clear();
             selectedItemIds.clear();
+            lastClickedCheckboxId = null;
             renderItems();
           }
         }
@@ -1815,6 +1963,7 @@
     resetClearRoomConfirm();
     expandedNoteIds.clear();
     selectedItemIds.clear();
+    lastClickedCheckboxId = null;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: 'leave', room: currentRoom }));
       ws.send(JSON.stringify({ action: 'join', room: clean }));
@@ -2044,15 +2193,45 @@
 
   // Delegated Card Actions
   itemsContainer.addEventListener('click', (e) => {
+    const taskCb = e.target.closest('.js-note-task-cb, .note-task-cb');
+    if (taskCb) {
+      const noteId = taskCb.getAttribute('data-id');
+      const lineIdx = taskCb.getAttribute('data-line');
+      if (noteId && lineIdx !== null) {
+        toggleNoteTaskLine(noteId, parseInt(lineIdx, 10));
+      }
+      return;
+    }
+
     const selectCb = e.target.closest('.js-select-item-cb, .item-select-cb');
     if (selectCb) {
       const selId = selectCb.getAttribute('data-id');
       if (selId) {
-        if (selectedItemIds.has(selId)) {
-          selectedItemIds.delete(selId);
-        } else {
+        const shouldSelect = !selectedItemIds.has(selId);
+        if (e.shiftKey && lastClickedCheckboxId && lastClickedCheckboxId !== selId) {
+          const visible = getFilteredSortedItems();
+          const startIdx = visible.findIndex((i) => i.id === lastClickedCheckboxId);
+          const endIdx = visible.findIndex((i) => i.id === selId);
+          if (startIdx >= 0 && endIdx >= 0) {
+            const [from, to] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+            for (let k = from; k <= to; k++) {
+              if (shouldSelect) {
+                selectedItemIds.add(visible[k].id);
+              } else {
+                selectedItemIds.delete(visible[k].id);
+              }
+            }
+          } else if (shouldSelect) {
+            selectedItemIds.add(selId);
+          } else {
+            selectedItemIds.delete(selId);
+          }
+        } else if (shouldSelect) {
           selectedItemIds.add(selId);
+        } else {
+          selectedItemIds.delete(selId);
         }
+        lastClickedCheckboxId = selId;
         renderItems();
       }
       return;
@@ -2186,6 +2365,11 @@
       return batchCopySelectedItems();
     });
   }
+  if (batchExportSelectedBtn) {
+    batchExportSelectedBtn.addEventListener('click', () => {
+      batchExportSelectedItems();
+    });
+  }
   if (batchDeleteSelectedBtn) {
     batchDeleteSelectedBtn.addEventListener('click', () => {
       return batchDeleteSelectedItems();
@@ -2194,6 +2378,7 @@
   if (batchClearSelectionBtn) {
     batchClearSelectionBtn.addEventListener('click', () => {
       selectedItemIds.clear();
+      lastClickedCheckboxId = null;
       renderItems();
     });
   }
@@ -2376,6 +2561,19 @@
         roomModal.classList.remove('open');
         switchRoom(targetRoom);
       }
+    });
+  }
+
+  if (copyRoomLinkBtn) {
+    copyRoomLinkBtn.addEventListener('click', () => {
+      const typedRoom = (roomNameInput && typeof roomNameInput.value === 'string' && roomNameInput.value.trim())
+        ? roomNameInput.value.trim().toLowerCase()
+        : currentRoom;
+      return copyToClipboard(
+        getShareRoomUrl(typedRoom),
+        copyRoomLinkBtn,
+        `🔗 Đã sao chép link phòng "${typedRoom}" vào Clipboard!`
+      );
     });
   }
 
