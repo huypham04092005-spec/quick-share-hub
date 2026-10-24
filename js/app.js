@@ -20,6 +20,7 @@
   let currentQrText = '';
   let currentQrTitle = '';
   let currentQrDataUrl = '';
+  let currentQrPromise = null;
   let publicOrigin = '';
 
   // DOM Elements
@@ -1972,16 +1973,20 @@
     qrImage.src = TRANSPARENT_PIXEL;
     qrModal.classList.add('open');
 
-    try {
-      const res = await fetch(`/api/qr?text=${encodeURIComponent(text)}`);
-      const data = await res.json();
-      if (data.success && data.dataUrl) {
-        currentQrDataUrl = data.dataUrl;
-        qrImage.src = data.dataUrl;
+    const loadTask = (async () => {
+      try {
+        const res = await fetch(`/api/qr?text=${encodeURIComponent(text)}`);
+        const data = await res.json();
+        if (data.success && data.dataUrl && currentQrText === text) {
+          currentQrDataUrl = data.dataUrl;
+          qrImage.src = data.dataUrl;
+        }
+      } catch (err) {
+        showToast('❌ Không thể tạo mã QR');
       }
-    } catch (err) {
-      showToast('❌ Không thể tạo mã QR');
-    }
+    })();
+    currentQrPromise = loadTask;
+    await loadTask;
   }
 
   function downloadQrCodePng() {
@@ -2018,13 +2023,29 @@
       if (/;base64/i.test(meta)) {
         let bytes = null;
         if (typeof atob === 'function') {
-          const binStr = atob(rawData);
+          const binStr = atob(rawData.replace(/\s+/g, ''));
           bytes = new Uint8Array(binStr.length);
           for (let i = 0; i < binStr.length; i++) {
             bytes[i] = binStr.charCodeAt(i);
           }
         } else if (typeof Buffer !== 'undefined') {
           bytes = new Uint8Array(Buffer.from(rawData, 'base64'));
+        } else {
+          const b64 = rawData.replace(/[^A-Za-z0-9+/=]/g, '');
+          const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+          const out = [];
+          for (let i = 0; i < b64.length; i += 4) {
+            const c0 = alphabet.indexOf(b64[i]);
+            const c1 = alphabet.indexOf(b64[i + 1]);
+            const c2 = b64[i + 2] === '=' ? -1 : alphabet.indexOf(b64[i + 2]);
+            const c3 = b64[i + 3] === '=' ? -1 : alphabet.indexOf(b64[i + 3]);
+            if (c0 < 0 || c1 < 0) break;
+            const triple = (c0 << 18) | (c1 << 12) | ((c2 > 0 ? c2 : 0) << 6) | (c3 > 0 ? c3 : 0);
+            out.push((triple >> 16) & 0xff);
+            if (c2 >= 0) out.push((triple >> 8) & 0xff);
+            if (c3 >= 0) out.push(triple & 0xff);
+          }
+          bytes = new Uint8Array(out);
         }
         if (bytes) {
           return new Blob([bytes], { type: mime });
@@ -2037,6 +2058,11 @@
   }
 
   async function shareQrCodeImage() {
+    if (!currentQrDataUrl && currentQrPromise) {
+      try {
+        await currentQrPromise;
+      } catch (_) {}
+    }
     const srcUrl = currentQrDataUrl || (qrImage && qrImage.src) || '';
     const qrTitle = currentQrTitle || 'Quick Share Hub — Mã QR';
     const qrText = currentQrText || '';
@@ -2074,16 +2100,25 @@
     }
 
     if (navigator.share && typeof navigator.share === 'function' && qrText) {
+      const isHttpUrl = /^https?:\/\/\S+$/i.test(qrText.trim());
+      const sharePayload = isHttpUrl
+        ? { title: qrTitle, text: qrText, url: qrText.trim() }
+        : { title: qrTitle, text: qrText };
       try {
-        await navigator.share({
-          title: qrTitle,
-          text: qrText,
-          url: qrText
-        });
+        await navigator.share(sharePayload);
         showToast('📤 Đã mở bảng chia sẻ mã QR!');
         return;
       } catch (err) {
         if (err && err.name === 'AbortError') return;
+        if (isHttpUrl) {
+          try {
+            await navigator.share({ title: qrTitle, text: qrText });
+            showToast('📤 Đã mở bảng chia sẻ mã QR!');
+            return;
+          } catch (retryErr) {
+            if (retryErr && retryErr.name === 'AbortError') return;
+          }
+        }
       }
     }
 
@@ -2970,7 +3005,7 @@
   }
 
   roomQrBtn.addEventListener('click', () => {
-    openQrModal(getShareRoomUrl(), `Phòng "${currentRoom}"`);
+    return openQrModal(getShareRoomUrl(), `Phòng "${currentRoom}"`);
   });
 
   clearRoomBtn.addEventListener('click', () => {
