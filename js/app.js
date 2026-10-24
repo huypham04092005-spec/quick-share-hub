@@ -120,6 +120,7 @@
 
   const editModal = document.getElementById('editModal');
   const editModalTitle = document.getElementById('editModalTitle');
+  const editItemTitleInput = document.getElementById('editItemTitleInput');
   const editItemTextarea = document.getElementById('editItemTextarea');
   const editItemTtlSelect = document.getElementById('editItemTtlSelect');
   const closeEditModalBtn = document.getElementById('closeEditModalBtn');
@@ -405,12 +406,109 @@
     return result;
   }
 
+  function extractFirstLineTitle(text) {
+    if (!text || typeof text !== 'string') return '';
+    const firstLine = text.split(/\r?\n/)[0].trim();
+    if (firstLine.length <= 60) return firstLine;
+    return firstLine.slice(0, 57).trim() + '...';
+  }
+
+  function extractLinkDefaultTitle(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return '';
+    const trimmed = rawUrl.trim();
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.hostname) return parsed.hostname;
+    } catch (_) {}
+    return '';
+  }
+
+  function getCustomItemTitle(item) {
+    if (!item || typeof item !== 'object') return '';
+    const rawTitle = String(item.title || '').trim();
+    if (!rawTitle) return '';
+    if (item.type === 'link') {
+      const rawContent = String(item.content || '').trim();
+      const defaultDomain = String(item.domain || extractLinkDefaultTitle(rawContent) || '').trim();
+      if (rawTitle !== rawContent && rawTitle !== defaultDomain) {
+        return rawTitle;
+      }
+      return '';
+    }
+    if (item.type === 'note') {
+      const defaultNoteTitle = extractFirstLineTitle(item.content);
+      if (rawTitle !== defaultNoteTitle) {
+        return rawTitle;
+      }
+      return '';
+    }
+    if (item.type === 'file') {
+      const rawFileName = String(item.fileName || item.file_name || '').trim();
+      if (rawTitle !== rawFileName) {
+        return rawTitle;
+      }
+      return '';
+    }
+    return '';
+  }
+
   function updateComposerCounter() {
     if (!composerCharCount || !itemInput) return;
     const val = itemInput.value || '';
     const chars = val.length;
     const lines = val ? val.split(/\r?\n/).length : 1;
     composerCharCount.textContent = `${chars.toLocaleString('vi-VN')} ký tự • ${lines} dòng`;
+  }
+
+  const DRAFT_KEY_PREFIX = 'qsh_draft_';
+
+  function getDraftStorageKey(room = currentRoom) {
+    const clean = (room && typeof room === 'string' && room.trim())
+      ? room.trim().toLowerCase()
+      : 'default';
+    return `${DRAFT_KEY_PREFIX}${clean}`;
+  }
+
+  function saveComposerDraft(room = currentRoom) {
+    if (!itemInput) return;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const key = getDraftStorageKey(room);
+        const val = itemInput.value || '';
+        if (val) {
+          localStorage.setItem(key, val);
+        } else if (typeof localStorage.removeItem === 'function') {
+          localStorage.removeItem(key);
+        } else if (typeof localStorage.setItem === 'function') {
+          localStorage.setItem(key, '');
+        }
+      }
+    } catch (_) {}
+  }
+
+  function clearComposerDraft(room = currentRoom) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const key = getDraftStorageKey(room);
+        if (typeof localStorage.removeItem === 'function') {
+          localStorage.removeItem(key);
+        } else if (typeof localStorage.setItem === 'function') {
+          localStorage.setItem(key, '');
+        }
+      }
+    } catch (_) {}
+  }
+
+  function restoreComposerDraft(room = currentRoom) {
+    if (!itemInput) return;
+    let saved = '';
+    try {
+      if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
+        saved = localStorage.getItem(getDraftStorageKey(room)) || '';
+      }
+    } catch (_) {}
+    itemInput.value = saved;
+    updateComposerCounter();
   }
 
   async function copyToClipboard(text, buttonEl, toastMessage = '📋 Đã sao chép vào Clipboard!') {
@@ -629,6 +727,7 @@
       const data = await res.json();
       if (res.ok && data.success && data.item) {
         itemInput.value = '';
+        clearComposerDraft(currentRoom);
         updateComposerCounter();
         upsertItemInState(data.item);
         showToast('🚀 Đã chia sẻ thành công!');
@@ -681,6 +780,7 @@
 
     if (uploadedAny && optionalCaption && itemInput) {
       itemInput.value = '';
+      clearComposerDraft(currentRoom);
       updateComposerCounter();
     }
 
@@ -817,7 +917,8 @@
     const m = targetLine.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
     if (!m) return;
     const isChecked = m[2].toLowerCase() === 'x';
-    const nextMark = isChecked ? ' ' : 'x';
+    const nextChecked = !isChecked;
+    const nextMark = nextChecked ? 'x' : ' ';
     lines[parsedIdx] = `${m[1]}[${nextMark}]${m[3]}`;
     const updatedContent = lines.join('\n');
 
@@ -831,7 +932,10 @@
       const res = await fetch(`/api/items/${encodeURIComponent(itemId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: updatedContent })
+        body: JSON.stringify({
+          content: updatedContent,
+          taskToggle: { lineIndex: parsedIdx, checked: nextChecked }
+        })
       });
       const data = await res.json();
       if (res.ok && data.success && data.item) {
@@ -1026,6 +1130,12 @@
     if (editItemTtlSelect) {
       editItemTtlSelect.value = 'keep';
     }
+    if (editItemTitleInput) {
+      editItemTitleInput.placeholder = item.type === 'file'
+        ? 'Tiêu đề tùy chỉnh cho file (tùy chọn)...'
+        : 'Tiêu đề / Nhãn gợi nhớ (tùy chọn)...';
+      editItemTitleInput.value = getCustomItemTitle(item);
+    }
     editItemTextarea.placeholder = item.type === 'file'
       ? 'Nhập ghi chú đính kèm cho file (để trống nếu không cần)...'
       : 'Nhập nội dung mới...';
@@ -1046,6 +1156,9 @@
     }
     const ttlVal = editItemTtlSelect ? editItemTtlSelect.value : 'keep';
     const payload = { content: trimmed };
+    if (editItemTitleInput) {
+      payload.title = String(editItemTitleInput.value || '').trim();
+    }
     if (ttlVal && ttlVal !== 'keep') {
       payload.ttl = ttlVal;
     }
@@ -1471,11 +1584,13 @@
     const localPreviewUrl = `/api/files/${encodeURIComponent(item.id)}/preview`;
     const localDownloadUrl = `/api/files/${encodeURIComponent(item.id)}/download`;
 
+    const customTitle = getCustomItemTitle(item);
     let bodyHtml = '';
     if (item.type === 'link') {
       const safeLink = sanitizeUrl(item.content);
       bodyHtml = `
         <div class="item-body">
+          ${customTitle ? `<div class="item-custom-title">${escapeHtml(customTitle)}</div>` : ''}
           <a href="${escapeHtml(safeLink)}" target="_blank" rel="noopener noreferrer" class="item-link">
             ${escapeHtml(item.content)}
           </a>
@@ -1491,6 +1606,7 @@
         : 'item-note-pre';
       bodyHtml = `
         <div class="item-body">
+          ${customTitle ? `<div class="item-custom-title">${escapeHtml(customTitle)}</div>` : ''}
           <pre class="${notePreClass}" data-note-id="${escapeHtml(item.id)}">${renderNoteContentWithLinks(item.content, item.id)}</pre>
           ${isLongNote ? `
             <button type="button" class="btn btn-sm note-expand-btn js-toggle-note-expand" data-id="${escapeHtml(item.id)}" data-lines="${noteLineCount}">
@@ -1503,6 +1619,7 @@
       const hasCaption = item.content && item.content !== fileName;
       bodyHtml = `
         <div class="item-body">
+          ${customTitle ? `<div class="item-custom-title">${escapeHtml(customTitle)}</div>` : ''}
           <div class="item-file-row">
             <div class="file-info-main">
               <span class="file-icon-box">${isPdf ? '📕' : (isImage ? '🖼️' : '📄')}</span>
@@ -1983,6 +2100,7 @@
 
   function switchRoom(newRoom) {
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
+    saveComposerDraft(currentRoom);
     resetClearRoomConfirm();
     expandedNoteIds.clear();
     selectedItemIds.clear();
@@ -1995,6 +2113,7 @@
     currentRoom = clean;
     currentRoomBadge.textContent = currentRoom;
     recordRecentRoom(currentRoom);
+    restoreComposerDraft(currentRoom);
 
     const url = new URL(window.location.href);
     if (currentRoom === 'default') {
@@ -2019,6 +2138,7 @@
 
   itemInput.addEventListener('input', () => {
     updateComposerCounter();
+    saveComposerDraft(currentRoom);
   });
 
   itemInput.addEventListener('keydown', (e) => {
@@ -2501,6 +2621,14 @@
       saveEditedItem();
     });
   }
+  if (editItemTitleInput) {
+    editItemTitleInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveEditedItem();
+      }
+    });
+  }
   if (editItemTextarea) {
     editItemTextarea.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -2691,7 +2819,11 @@
   applyTheme(getInitialTheme(), false);
   currentRoomBadge.textContent = currentRoom;
   recordRecentRoom(currentRoom);
-  updateComposerCounter();
+  if (itemInput && !itemInput.value) {
+    restoreComposerDraft(currentRoom);
+  } else {
+    updateComposerCounter();
+  }
   fetchPublicOrigin();
   fetchItems();
   connectWebSocket();

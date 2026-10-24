@@ -1498,7 +1498,7 @@
       return makeJsonResponse({ success: true, item: found.item }, 200);
     }
 
-    // 5c. PUT /api/items/:id (Edit Note / Link / Title)
+    // 5c. PUT /api/items/:id (Edit Note / Link / Title / Atomic Task Toggle)
     const itemSingleMatch = apiPath.match(/^\/api\/items\/([^/]+)$/);
     if (itemSingleMatch && upperMethod === 'PUT') {
       const id = decodeURIComponent(itemSingleMatch[1]);
@@ -1521,9 +1521,40 @@
         return makeJsonResponse({ success: false, error: 'Invalid JSON body' }, 400);
       }
 
+      let resolvedContent = body.content;
+      if (body.taskToggle && typeof body.taskToggle === 'object') {
+        const rawExisting = String(found.item.content || '');
+        const lineIdx = Number(body.taskToggle.lineIndex ?? body.taskToggle.line);
+        const lines = rawExisting.split('\n');
+        let toggled = null;
+        if (Number.isInteger(lineIdx) && lineIdx >= 0 && lineIdx < lines.length) {
+          const rawLine = lines[lineIdx];
+          const hasCr = rawLine.endsWith('\r');
+          const cleanLine = hasCr ? rawLine.slice(0, -1) : rawLine;
+          const m = cleanLine.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
+          if (m) {
+            const currentlyChecked = m[2].toLowerCase() === 'x';
+            const nextChecked = typeof body.taskToggle.checked === 'boolean'
+              ? body.taskToggle.checked
+              : !currentlyChecked;
+            const nextMark = nextChecked ? 'x' : ' ';
+            lines[lineIdx] = `${m[1]}[${nextMark}]${m[3]}${hasCr ? '\r' : ''}`;
+            toggled = lines.join('\n');
+          }
+        }
+        if (toggled !== null) {
+          resolvedContent = toggled;
+        } else if (body.content === undefined) {
+          return makeJsonResponse({
+            success: false,
+            error: 'Invalid taskToggle lineIndex or target line is not a checklist item'
+          }, 400);
+        }
+      }
+
       const now = Date.now();
-      if (body.content !== undefined) {
-        const trimmed = String(body.content || '').trim();
+      if (resolvedContent !== undefined) {
+        const trimmed = String(resolvedContent || '').trim();
         if (found.item.type !== 'file') {
           if (!trimmed) {
             return makeJsonResponse({ success: false, error: 'Content cannot be empty' }, 400);
@@ -1536,21 +1567,31 @@
           const detected = detectType(trimmed);
           found.item.type = detected.type;
           found.item.content = detected.content;
-          if (body.title !== undefined && String(body.title).trim()) {
-            found.item.title = String(body.title).trim();
+          if (body.title !== undefined) {
+            const explicitTitle = String(body.title || '').trim();
+            found.item.title = explicitTitle || detected.title;
           } else if (hadCustomTitle) {
             found.item.title = found.item.title;
           } else {
             found.item.title = detected.title;
           }
         } else {
-          found.item.content = trimmed || found.item.fileName || found.item.title || 'file';
-          if (body.title !== undefined && String(body.title).trim()) {
-            found.item.title = String(body.title).trim();
+          const defaultFileName = found.item.fileName || found.item.file_name || 'file';
+          found.item.content = trimmed || defaultFileName;
+          if (body.title !== undefined) {
+            const explicitTitle = String(body.title || '').trim();
+            found.item.title = explicitTitle || defaultFileName;
           }
         }
-      } else if (body.title !== undefined && String(body.title).trim()) {
-        found.item.title = String(body.title).trim();
+      } else if (body.title !== undefined) {
+        const explicitTitle = String(body.title || '').trim();
+        if (explicitTitle) {
+          found.item.title = explicitTitle;
+        } else if (found.item.type === 'file') {
+          found.item.title = found.item.fileName || found.item.file_name || 'file';
+        } else {
+          found.item.title = detectType(String(found.item.content || '').trim()).title;
+        }
       }
       if (body.pinned !== undefined) {
         found.item.pinned = Boolean(body.pinned);

@@ -1329,3 +1329,15 @@ body {
   color: #64748b;
 }
 
+.item-custom-title {
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+[data-theme="light"] .item-custom-title {
+  color: #0f172a;
+}
