@@ -202,6 +202,39 @@
       .replace(/'/g, '&#39;');
   }
 
+  function stripUnbalancedTrailingPunct(rawUrl) {
+    let url = rawUrl;
+    let trailing = '';
+    while (url.length > 0) {
+      const lastChar = url[url.length - 1];
+      if (/[.,;:!?]/.test(lastChar)) {
+        trailing = lastChar + trailing;
+        url = url.slice(0, -1);
+      } else if (lastChar === ')') {
+        const opens = (url.match(/\(/g) || []).length;
+        const closes = (url.match(/\)/g) || []).length;
+        if (closes > opens) {
+          trailing = lastChar + trailing;
+          url = url.slice(0, -1);
+        } else {
+          break;
+        }
+      } else if (lastChar === ']') {
+        const opens = (url.match(/\[/g) || []).length;
+        const closes = (url.match(/\]/g) || []).length;
+        if (closes > opens) {
+          trailing = lastChar + trailing;
+          url = url.slice(0, -1);
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+    return { url, trailing };
+  }
+
   function renderNoteContentWithLinks(rawText) {
     if (!rawText) return '';
     const str = String(rawText);
@@ -214,13 +247,7 @@
       if (matchStart > lastIdx) {
         result += escapeHtml(str.slice(lastIdx, matchStart));
       }
-      let rawUrl = match[0];
-      let trailing = '';
-      const trailMatch = rawUrl.match(/([.,;:!?)\]]+)$/);
-      if (trailMatch) {
-        trailing = trailMatch[1];
-        rawUrl = rawUrl.slice(0, -trailing.length);
-      }
+      const { url: rawUrl, trailing } = stripUnbalancedTrailingPunct(match[0]);
       const safeHref = sanitizeUrl(rawUrl);
       if (safeHref !== '#') {
         result += `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer" class="note-inline-link">${escapeHtml(rawUrl)}</a>${escapeHtml(trailing)}`;
@@ -294,10 +321,10 @@
           const downloadId = params.get('download');
           if (previewId) {
             const target = items.find((i) => i.id === previewId);
-            openPdfPreviewModal(previewId, target ? (target.fileName || target.file_name || target.title) : 'PDF');
+            openPdfPreviewModal(previewId, target ? (target.fileName || target.file_name || target.title) : undefined);
           } else if (downloadId) {
             const target = items.find((i) => i.id === downloadId);
-            triggerCloudFileDownload(downloadId, target ? (target.fileName || target.file_name || target.title) : 'download');
+            triggerCloudFileDownload(downloadId, target ? (target.fileName || target.file_name || target.title) : undefined);
           }
         }
       }
@@ -904,20 +931,6 @@
   }
 
   async function openPdfPreviewModal(id, fileName) {
-    const item = items.find((i) => i.id === id);
-    const resolvedName = fileName || (item && (item.fileName || item.file_name || item.title)) || 'document.pdf';
-    const lowerName = String(resolvedName).toLowerCase();
-    const mime = (item && (item.mimeType || item.mime_type)) || '';
-    const isPdf = Boolean((item && (item.isPdf || item.is_pdf)) || mime === 'application/pdf' || lowerName.endsWith('.pdf'));
-    const isImage = !isPdf && Boolean(mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
-    const isText = !isPdf && !isImage && Boolean(
-      mime.startsWith('text/') ||
-      mime.includes('json') ||
-      mime.includes('xml') ||
-      mime.includes('javascript') ||
-      /\.(txt|md|json|csv|tsv|log|js|ts|py|html|css|xml|ya?ml|ini|sh|bat|sql)$/i.test(lowerName)
-    );
-
     const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
     let previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
     let downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
@@ -931,6 +944,23 @@
       previewUrl = blobUrl;
       downloadUrl = blobUrl;
     }
+
+    const cloudMeta = (isCloud && typeof window.QSHCloud.getFileMeta === 'function')
+      ? window.QSHCloud.getFileMeta(id)
+      : null;
+    const item = items.find((i) => i.id === id) || cloudMeta;
+    const resolvedName = fileName || (item && (item.fileName || item.file_name || item.title)) || 'document.pdf';
+    const lowerName = String(resolvedName).toLowerCase();
+    const mime = (item && (item.mimeType || item.mime_type)) || '';
+    const isPdf = Boolean((item && (item.isPdf || item.is_pdf)) || mime === 'application/pdf' || lowerName.endsWith('.pdf'));
+    const isImage = !isPdf && Boolean(mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isText = !isPdf && !isImage && Boolean(
+      mime.startsWith('text/') ||
+      mime.includes('json') ||
+      mime.includes('xml') ||
+      mime.includes('javascript') ||
+      /\.(txt|md|json|csv|tsv|log|js|ts|py|html|css|xml|ya?ml|ini|sh|bat|sql)$/i.test(lowerName)
+    );
 
     pdfModalOpenTab.href = previewUrl;
     pdfModalDownload.href = downloadUrl;
@@ -1006,9 +1036,10 @@
     if (window.QSHCloud && window.QSHCloud.isCloudMode()) {
       const blobUrl = await window.QSHCloud.getBlobUrlForFile(id);
       if (blobUrl) {
+        const meta = typeof window.QSHCloud.getFileMeta === 'function' ? window.QSHCloud.getFileMeta(id) : null;
         const a = document.createElement('a');
         a.href = blobUrl;
-        a.download = fileName || 'download';
+        a.download = fileName || (meta && meta.fileName) || 'download';
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -1049,7 +1080,7 @@
           window.QSHCloud.recordTraffic({ downloadBytes: byteLen, wsEvents: 1 });
         }
         const msg = JSON.parse(event.data);
-        if ((msg.type === 'item_created' || msg.type === 'item_pinned') && msg.item) {
+        if ((msg.type === 'item_created' || msg.type === 'item_updated' || msg.type === 'item_pinned') && msg.item) {
           if ((msg.item.room || 'default') === currentRoom) {
             upsertItemInState(msg.item);
           }

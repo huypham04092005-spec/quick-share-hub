@@ -504,7 +504,7 @@
     }
   }
 
-  function mergeRoomItems(localItems, remoteItems, room) {
+  function mergeRoomItems(localItems, remoteItems, room, allowKeepUnsyncedLocal = true, syncCutoffAt = 0) {
     const clearedAt = cloudState.clearedRoomsAt.get(room) || 0;
     const byId = new Map();
 
@@ -522,16 +522,16 @@
       if (cloudState.deletedIds.has(item.id)) continue;
       if (clearedAt && item.createdAt <= clearedAt) continue;
 
+      const localTs = Number(item.updatedAt ?? item.createdAt ?? 0);
       const existingRemote = byId.get(item.id);
       if (existingRemote) {
-        const localTs = Number(item.updatedAt ?? item.createdAt ?? 0);
         const remoteTs = Number(existingRemote.updatedAt ?? existingRemote.createdAt ?? 0);
         if (localTs > remoteTs) {
           byId.set(item.id, item);
         } else if (localTs === remoteTs && item.fileGistId && !existingRemote.fileGistId) {
           byId.set(item.id, item);
         }
-      } else {
+      } else if (allowKeepUnsyncedLocal || (syncCutoffAt > 0 && localTs > syncCutoffAt)) {
         byId.set(item.id, item);
       }
     }
@@ -555,6 +555,8 @@
 
     cloudState.initPromise = (async () => {
       const t0 = Date.now();
+      const wasInitialized = cloudState.initialized;
+      const prevFetchedAt = cloudState.lastFetchedAt;
       try {
         const res = await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}?_t=${Date.now()}`, {
           headers: {
@@ -575,7 +577,8 @@
                   ingestRemoteRoomMeta(rName, parsed);
                   if (Array.isArray(parsed.items)) {
                     const existingLocal = cloudState.rooms.get(rName) || [];
-                    cloudState.rooms.set(rName, mergeRoomItems(existingLocal, parsed.items, rName));
+                    const isDirty = !wasInitialized || cloudState.dirtyRooms.has(rName);
+                    cloudState.rooms.set(rName, mergeRoomItems(existingLocal, parsed.items, rName, isDirty, prevFetchedAt));
                   }
                 } catch (_) {}
               }
@@ -1914,6 +1917,17 @@
     }
   }
 
+  function getFileMeta(id) {
+    const found = findItemAcrossRooms(id, false);
+    const fileEntry = cloudState.files.get(id);
+    if (!found && !fileEntry) return null;
+    return {
+      fileName: (found && (found.item.fileName || found.item.file_name || found.item.title)) || (fileEntry && fileEntry.fileName) || null,
+      mimeType: (found && (found.item.mimeType || found.item.mime_type)) || (fileEntry && fileEntry.mimeType) || '',
+      isPdf: Boolean((found && (found.item.isPdf || found.item.is_pdf)) || (fileEntry && fileEntry.isPdf))
+    };
+  }
+
   function getCloudStateInfo() {
     return {
       initialized: cloudState.initialized,
@@ -1932,6 +1946,8 @@
     isCloudMode: isCloudHost,
     getBlobUrlForFile,
     getTextForFile,
+    getFileMeta,
+    getCloudToken,
     flushDirtyRoomsToGist,
     fetchCloudGistState,
     getCloudStateInfo,
@@ -1940,6 +1956,7 @@
     recordTraffic,
     resetTelemetry
   };
+  global.QuickShareCloud = global.QSHCloud;
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = global.QSHCloud;
