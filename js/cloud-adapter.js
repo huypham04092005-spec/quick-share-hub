@@ -678,7 +678,7 @@
     }
     try {
       const b64 = uint8ToBase64(bytes);
-      const chunkMax = 2 * 1024 * 1024; // 2 MB base64 per Gist file entry
+      const chunkMax = 750 * 1024; // 750 KB base64 per Gist file entry (< 1MB GitHub truncation limit)
       const gistFiles = {};
       if (b64.length <= chunkMax) {
         gistFiles['file_payload.json'] = {

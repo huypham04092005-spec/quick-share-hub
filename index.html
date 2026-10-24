@@ -159,9 +159,14 @@
       <div class="panel-card">
         <div class="panel-header">
           <div class="panel-title">🔗 Gửi Link, Ghi chú hoặc Clipboard</div>
-          <button id="pasteClipboardBtn" type="button" class="btn btn-sm btn-emerald" title="Đọc từ Clipboard và gửi ngay (1-Click Paste)">
-            📋 Dán từ Clipboard (1-Click)
-          </button>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+            <button id="copyLatestBtn" type="button" class="btn btn-sm" title="Copy nhanh mục mới nhất trong phòng (Phím tắt: Alt+C)">
+              ⚡ Copy mới nhất
+            </button>
+            <button id="pasteClipboardBtn" type="button" class="btn btn-sm btn-emerald" title="Đọc từ Clipboard và gửi ngay (1-Click Paste)">
+              📋 Dán từ Clipboard (1-Click)
+            </button>
+          </div>
         </div>
 
         <textarea
@@ -210,8 +215,9 @@
 
     <!-- Filter & Search Bar -->
     <section class="feed-toolbar">
-      <div class="filter-tabs" role="tablist">
+      <div id="filterTabsBar" class="filter-tabs" role="tablist">
         <button type="button" class="filter-tab active" data-filter="all">Tất cả (<span id="countAll">0</span>)</button>
+        <button type="button" class="filter-tab" data-filter="pinned">📌 Đã ghim (<span id="countPinned">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="link">🔗 Link (<span id="countLink">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="note">📝 Ghi chú (<span id="countNote">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="file">📄 PDF &amp; File (<span id="countFile">0</span>)</button>

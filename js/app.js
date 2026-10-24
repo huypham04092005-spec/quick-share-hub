@@ -26,6 +26,7 @@
   const itemInput = document.getElementById('itemInput');
   const ttlSelect = document.getElementById('ttlSelect');
   const sendItemBtn = document.getElementById('sendItemBtn');
+  const copyLatestBtn = document.getElementById('copyLatestBtn');
   const pasteClipboardBtn = document.getElementById('pasteClipboardBtn');
   const composerCharCount = document.getElementById('composerCharCount');
 
@@ -35,10 +36,12 @@
   const uploadProgressBar = document.getElementById('uploadProgressBar');
 
   const filterTabs = document.querySelectorAll('.filter-tab');
+  const filterTabsBar = document.getElementById('filterTabsBar');
   const searchInput = document.getElementById('searchInput');
   const itemsContainer = document.getElementById('itemsContainer');
 
   const countAll = document.getElementById('countAll');
+  const countPinned = document.getElementById('countPinned');
   const countLink = document.getElementById('countLink');
   const countNote = document.getElementById('countNote');
   const countFile = document.getElementById('countFile');
@@ -437,6 +440,21 @@
     }
   }
 
+  let clearRoomConfirmArmed = false;
+  let clearRoomConfirmTimer = null;
+
+  function resetClearRoomConfirm() {
+    clearRoomConfirmArmed = false;
+    if (clearRoomConfirmTimer) {
+      clearTimeout(clearRoomConfirmTimer);
+      clearRoomConfirmTimer = null;
+    }
+    if (clearRoomBtn) {
+      clearRoomBtn.textContent = '🗑️ Xóa tất cả';
+      clearRoomBtn.classList.remove('confirm-armed');
+    }
+  }
+
   async function clearCurrentRoom() {
     if (items.length === 0) return;
     try {
@@ -451,6 +469,48 @@
     } catch (err) {
       showToast('❌ Lỗi khi xóa phòng');
     }
+  }
+
+  async function handleClearRoomClick() {
+    if (items.length === 0) {
+      resetClearRoomConfirm();
+      showToast('ℹ️ Phòng hiện đang trống');
+      return;
+    }
+    if (!clearRoomConfirmArmed) {
+      clearRoomConfirmArmed = true;
+      if (clearRoomBtn) {
+        clearRoomBtn.textContent = '⚠️ Bấm lần nữa để xóa';
+        clearRoomBtn.classList.add('confirm-armed');
+      }
+      showToast('⚠️ Bấm "Xóa tất cả" lần nữa trong 3.5 giây để xác nhận xóa toàn bộ phòng');
+      if (clearRoomConfirmTimer) clearTimeout(clearRoomConfirmTimer);
+      clearRoomConfirmTimer = setTimeout(() => {
+        resetClearRoomConfirm();
+      }, 3500);
+      return;
+    }
+    resetClearRoomConfirm();
+    await clearCurrentRoom();
+  }
+
+  async function copyLatestItem() {
+    if (!items || items.length === 0) {
+      showToast('⚠️ Chưa có mục nào trong phòng để sao chép!');
+      return;
+    }
+    const newest = items.slice().sort((a, b) => {
+      return ((b.createdAt || b.created_at || 0) - (a.createdAt || a.created_at || 0));
+    })[0];
+    if (!newest) return;
+    const shareOrigin = getShareOrigin();
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    const copyTarget = newest.type === 'file'
+      ? (isCloud
+        ? `${shareOrigin}/?room=${encodeURIComponent(currentRoom)}&download=${encodeURIComponent(newest.id)}`
+        : `${shareOrigin}/api/files/${encodeURIComponent(newest.id)}/download`)
+      : (newest.content || '');
+    await copyToClipboard(copyTarget, copyLatestBtn);
   }
 
   async function togglePinItem(id) {
@@ -658,12 +718,19 @@
 
     // Update counts
     countAll.textContent = items.length;
+    if (countPinned) {
+      countPinned.textContent = items.filter((i) => Boolean(i.pinned)).length;
+    }
     countLink.textContent = items.filter((i) => i.type === 'link').length;
     countNote.textContent = items.filter((i) => i.type === 'note').length;
     countFile.textContent = items.filter((i) => i.type === 'file').length;
 
     const filtered = items.filter((item) => {
-      if (activeFilter !== 'all' && item.type !== activeFilter) return false;
+      if (activeFilter === 'pinned') {
+        if (!item.pinned) return false;
+      } else if (activeFilter !== 'all' && item.type !== activeFilter) {
+        return false;
+      }
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const hay = `${item.title || ''} ${item.content || ''} ${item.fileName || item.file_name || ''}`.toLowerCase();
@@ -1256,6 +1323,7 @@
 
   function switchRoom(newRoom) {
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
+    resetClearRoomConfirm();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: 'leave', room: currentRoom }));
       ws.send(JSON.stringify({ action: 'join', room: clean }));
@@ -1278,6 +1346,12 @@
   sendItemBtn.addEventListener('click', () => {
     createTextItem(itemInput.value, ttlSelect.value);
   });
+
+  if (copyLatestBtn) {
+    copyLatestBtn.addEventListener('click', () => {
+      copyLatestItem();
+    });
+  }
 
   itemInput.addEventListener('input', () => {
     updateComposerCounter();
@@ -1398,6 +1472,52 @@
     }
   });
 
+  function hasDraggedFiles(e) {
+    if (!e || !e.dataTransfer) return false;
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) return true;
+    const types = e.dataTransfer.types;
+    if (!types) return false;
+    if (typeof types.includes === 'function') return types.includes('Files');
+    if (typeof types.contains === 'function') return types.contains('Files');
+    return Array.from(types).includes('Files');
+  }
+
+  let windowDragDepth = 0;
+
+  window.addEventListener('dragenter', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    windowDragDepth++;
+    if (dropzone) dropzone.classList.add('drag-active');
+  });
+
+  window.addEventListener('dragover', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    if (dropzone) dropzone.classList.add('drag-active');
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    if (!hasDraggedFiles(e) && windowDragDepth <= 0) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    windowDragDepth = Math.max(0, windowDragDepth - 1);
+    if (windowDragDepth === 0 || !e.relatedTarget) {
+      windowDragDepth = 0;
+      if (dropzone) dropzone.classList.remove('drag-active');
+    }
+  });
+
+  window.addEventListener('drop', (e) => {
+    if (!hasDraggedFiles(e)) return;
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    windowDragDepth = 0;
+    if (dropzone) dropzone.classList.remove('drag-active');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      uploadFiles(e.dataTransfer.files);
+    }
+  });
+
   ['dragenter', 'dragover'].forEach((evt) => {
     dropzone.addEventListener(evt, (e) => {
       e.preventDefault();
@@ -1410,6 +1530,7 @@
     dropzone.addEventListener(evt, (e) => {
       e.preventDefault();
       e.stopPropagation();
+      windowDragDepth = 0;
       dropzone.classList.remove('drag-active');
     });
   });
@@ -1478,14 +1599,29 @@
   });
 
   // Filter Tabs & Search
+  function activateFilterTab(filterValue, tabEl) {
+    filterTabs.forEach((t) => t.classList.remove('active'));
+    if (tabEl && tabEl.classList) tabEl.classList.add('active');
+    activeFilter = filterValue || 'all';
+    renderItems();
+  }
+
   filterTabs.forEach((tab) => {
     tab.addEventListener('click', () => {
-      filterTabs.forEach((t) => t.classList.remove('active'));
-      tab.classList.add('active');
-      activeFilter = tab.getAttribute('data-filter') || 'all';
-      renderItems();
+      activateFilterTab(tab.getAttribute('data-filter') || 'all', tab);
     });
   });
+
+  if (filterTabsBar) {
+    filterTabsBar.addEventListener('click', (e) => {
+      const tab = e.target && typeof e.target.closest === 'function'
+        ? e.target.closest('.filter-tab')
+        : null;
+      if (tab) {
+        activateFilterTab(tab.getAttribute('data-filter') || 'all', tab);
+      }
+    });
+  }
 
   searchInput.addEventListener('input', () => {
     searchQuery = searchInput.value.trim();
@@ -1578,7 +1714,7 @@
   });
 
   clearRoomBtn.addEventListener('click', () => {
-    clearCurrentRoom();
+    handleClearRoomClick();
   });
 
   closeQrModalBtn.addEventListener('click', () => qrModal.classList.remove('open'));
@@ -1652,6 +1788,10 @@
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeAllModals();
+      resetClearRoomConfirm();
+    } else if (e.altKey && (e.key === 'c' || e.key === 'C')) {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      copyLatestItem();
     }
   });
 

@@ -1,5 +1,5 @@
 // public/sw.js
-const CACHE_NAME = 'quick-share-hub-v7-cloud';
+const CACHE_NAME = 'quick-share-hub-v8-cloud';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -41,11 +41,12 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  // Always bypass cache for API, Gist, ntfy, and WebSocket endpoints
+  // Always bypass cache for API, Gist, raw Gist content, ntfy, and WebSocket endpoints
   if (
     url.pathname.includes('/api/') ||
     url.pathname.includes('/ws') ||
     url.hostname.includes('github.com') ||
+    url.hostname.includes('githubusercontent.com') ||
     url.hostname.includes('ntfy.sh')
   ) {
     return;
