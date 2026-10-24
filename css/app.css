@@ -1045,3 +1045,159 @@ body {
   background: rgba(30, 41, 59, 0.75);
 }
 
+/* Multi-Select Batch Operations Bar */
+.batch-action-bar {
+  display: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  background: rgba(30, 41, 59, 0.92);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.18);
+}
+
+.batch-action-bar.active {
+  display: flex;
+}
+
+.batch-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-count-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: rgba(59, 130, 246, 0.22);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.item-select-cb {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.item-card.selected {
+  border-color: rgba(59, 130, 246, 0.65);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), var(--shadow-lg);
+}
+
+/* Light Mode Theme Overrides ([data-theme="light"]) */
+:root[data-theme="light"],
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --bg-card: rgba(255, 255, 255, 0.92);
+  --bg-card-hover: #ffffff;
+  --border-color: rgba(15, 23, 42, 0.14);
+  --border-highlight: rgba(37, 99, 235, 0.45);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent-blue: #2563eb;
+  --accent-blue-hover: #1d4ed8;
+  --shadow-lg: 0 10px 28px -4px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="light"] body {
+  background: radial-gradient(circle at top right, #dbeafe 0%, #f8fafc 45%, #f1f5f9 100%);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .btn {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.16);
+}
+
+[data-theme="light"] .btn:hover {
+  background: #e2e8f0;
+  border-color: rgba(15, 23, 42, 0.28);
+}
+
+[data-theme="light"] .btn-primary {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  color: #ffffff;
+  border-color: transparent;
+}
+
+[data-theme="light"] .btn-emerald {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #047857;
+}
+
+[data-theme="light"] .btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #dc2626;
+}
+
+[data-theme="light"] .composer-textarea,
+[data-theme="light"] .ttl-select,
+[data-theme="light"] .search-input,
+[data-theme="light"] .sort-select,
+[data-theme="light"] .filter-tab:not(.active),
+[data-theme="light"] .metric-card,
+[data-theme="light"] .item-file-row,
+[data-theme="light"] .pdf-mobile-fallback,
+[data-theme="light"] .recent-room-chip:not(.active) {
+  background: #f8fafc;
+  color: var(--text-primary);
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+[data-theme="light"] .dropzone {
+  background: rgba(241, 245, 249, 0.75);
+  border-color: rgba(15, 23, 42, 0.24);
+}
+
+[data-theme="light"] .item-note-pre {
+  background: #f1f5f9;
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="light"] .modal-box {
+  background: #ffffff;
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+[data-theme="light"] .batch-action-bar {
+  background: #eff6ff;
+  border-color: rgba(37, 99, 235, 0.35);
+}
+
+[data-theme="light"] .batch-count-badge {
+  background: rgba(37, 99, 235, 0.14);
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .item-link,
+[data-theme="light"] .note-inline-link {
+  color: #2563eb;
+}
+
+

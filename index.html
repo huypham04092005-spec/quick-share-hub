@@ -38,6 +38,10 @@
           📊 Dung lượng &amp; Băng thông
         </button>
 
+        <button id="themeToggleBtn" type="button" class="btn btn-sm" title="Chuyển đổi giao diện Sáng / Tối">
+          🌙 Tối
+        </button>
+
         <button id="roomQrBtn" type="button" class="btn btn-sm btn-primary" title="Mở mã QR để quét bằng điện thoại">
           📱 Mã QR Điện Thoại
         </button>
@@ -239,6 +243,27 @@
           placeholder="🔍 Tìm nhanh link, tên file, nội dung... ( / hoặc Ctrl+K )"
           title="Nhấn / hoặc Ctrl+K để tìm kiếm nhanh"
         />
+      </div>
+    </section>
+
+    <!-- Contextual Multi-Select Batch Action Bar -->
+    <section id="batchActionBar" class="batch-action-bar" style="display: none;" aria-label="Thao tác hàng loạt">
+      <div class="batch-status">
+        <span id="batchSelectedCount" class="batch-count-badge">Đã chọn 0 mục</span>
+      </div>
+      <div class="batch-actions">
+        <button id="batchSelectAllBtn" type="button" class="btn btn-sm" title="Chọn hoặc bỏ chọn tất cả mục đang hiển thị">
+          ☑️ Chọn tất cả
+        </button>
+        <button id="batchCopySelectedBtn" type="button" class="btn btn-sm btn-emerald" title="Sao chép toàn bộ nội dung / link của các mục đã chọn">
+          📋 Copy đã chọn
+        </button>
+        <button id="batchDeleteSelectedBtn" type="button" class="btn btn-sm btn-danger" title="Xóa tất cả các mục đang chọn">
+          🗑️ Xóa đã chọn
+        </button>
+        <button id="batchClearSelectionBtn" type="button" class="btn btn-sm" title="Bỏ chọn tất cả">
+          ✕ Hủy chọn
+        </button>
       </div>
     </section>
 

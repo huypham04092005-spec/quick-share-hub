@@ -10,6 +10,9 @@
   let sortOrder = 'newest';
   let searchQuery = '';
   const expandedNoteIds = new Set();
+  const selectedItemIds = new Set();
+  const THEME_STORAGE_KEY = 'qsh_theme';
+  let currentTheme = 'dark';
   let ws = null;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
@@ -23,6 +26,7 @@
   const wsStatusText = document.getElementById('wsStatusText');
   const currentRoomBadge = document.getElementById('currentRoomBadge');
   const roomSwitchBtn = document.getElementById('roomSwitchBtn');
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
   const roomQrBtn = document.getElementById('roomQrBtn');
   const clearRoomBtn = document.getElementById('clearRoomBtn');
 
@@ -42,6 +46,12 @@
   const filterTabsBar = document.getElementById('filterTabsBar');
   const sortOrderSelect = document.getElementById('sortOrderSelect');
   const searchInput = document.getElementById('searchInput');
+  const batchActionBar = document.getElementById('batchActionBar');
+  const batchSelectedCount = document.getElementById('batchSelectedCount');
+  const batchSelectAllBtn = document.getElementById('batchSelectAllBtn');
+  const batchCopySelectedBtn = document.getElementById('batchCopySelectedBtn');
+  const batchDeleteSelectedBtn = document.getElementById('batchDeleteSelectedBtn');
+  const batchClearSelectionBtn = document.getElementById('batchClearSelectionBtn');
   const itemsContainer = document.getElementById('itemsContainer');
 
   const countAll = document.getElementById('countAll');
@@ -129,6 +139,48 @@
     const params = new URLSearchParams(window.location.search);
     const raw = params.get('room');
     return (raw && raw.trim()) ? raw.trim().toLowerCase() : 'default';
+  }
+
+  function getInitialTheme() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem(THEME_STORAGE_KEY);
+        if (saved === 'light' || saved === 'dark') {
+          return saved;
+        }
+      }
+    } catch (_) {}
+    return 'dark';
+  }
+
+  function applyTheme(theme, persist = false) {
+    const validTheme = theme === 'light' ? 'light' : 'dark';
+    currentTheme = validTheme;
+    if (document.documentElement && typeof document.documentElement.setAttribute === 'function') {
+      document.documentElement.setAttribute('data-theme', validTheme);
+    }
+    if (themeToggleBtn) {
+      themeToggleBtn.textContent = validTheme === 'light' ? '☀️ Sáng' : '🌙 Tối';
+      themeToggleBtn.setAttribute(
+        'title',
+        validTheme === 'light'
+          ? 'Đang ở giao diện Sáng — Bấm để chuyển sang Tối'
+          : 'Đang ở giao diện Tối — Bấm để chuyển sang Sáng'
+      );
+    }
+    if (persist) {
+      try {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(THEME_STORAGE_KEY, validTheme);
+        }
+      } catch (_) {}
+    }
+  }
+
+  function toggleTheme() {
+    const nextTheme = currentTheme === 'light' ? 'dark' : 'light';
+    applyTheme(nextTheme, true);
+    showToast(nextTheme === 'light' ? '☀️ Đã chuyển sang giao diện Sáng (Light Mode)!' : '🌙 Đã chuyển sang giao diện Tối (Dark Mode)!');
   }
 
   function getShareOrigin() {
@@ -438,7 +490,38 @@
           const params = new URLSearchParams(window.location.search);
           const previewId = params.get('preview');
           const downloadId = params.get('download');
-          if (previewId) {
+          const sharedTitle = (params.get('shared_title') || '').trim();
+          const sharedText = (params.get('shared_text') || '').trim();
+          const sharedUrl = (params.get('shared_url') || '').trim();
+
+          if (sharedTitle || sharedText || sharedUrl) {
+            const shareParts = [];
+            if (sharedTitle && sharedTitle !== sharedUrl && (!sharedText || !sharedText.includes(sharedTitle))) {
+              shareParts.push(sharedTitle);
+            }
+            if (sharedText && sharedText !== sharedUrl) {
+              shareParts.push(sharedText);
+            }
+            if (sharedUrl && (!sharedText || !sharedText.includes(sharedUrl))) {
+              shareParts.push(sharedUrl);
+            }
+            const combinedShare = shareParts.join('\n').trim();
+            try {
+              const cleanUrl = new URL(window.location.href);
+              cleanUrl.searchParams.delete('shared_title');
+              cleanUrl.searchParams.delete('shared_text');
+              cleanUrl.searchParams.delete('shared_url');
+              const nextHref = cleanUrl.toString();
+              if (window.history && typeof window.history.replaceState === 'function') {
+                window.history.replaceState({}, '', nextHref);
+              } else if (window.history && typeof window.history.pushState === 'function') {
+                window.history.pushState({}, '', nextHref);
+              }
+            } catch (_) {}
+            if (combinedShare) {
+              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h');
+            }
+          } else if (previewId) {
             const target = items.find((i) => i.id === previewId);
             openPdfPreviewModal(previewId, target ? (target.fileName || target.file_name || target.title) : undefined);
           } else if (downloadId) {
@@ -574,6 +657,7 @@
       if (res.ok) {
         items = [];
         expandedNoteIds.clear();
+        selectedItemIds.clear();
         renderItems();
         showToast(`🗑️ Đã xóa toàn bộ mục trong phòng "${currentRoom}"`);
       }
@@ -885,6 +969,7 @@
   function removeItemFromState(id) {
     items = items.filter((i) => i.id !== id);
     expandedNoteIds.delete(id);
+    selectedItemIds.delete(id);
     renderItems();
   }
 
@@ -936,30 +1021,8 @@
     return timeB - timeA;
   }
 
-  function renderItems() {
-    const now = Date.now();
-    // Filter out expired items client-side too, and sort pinned items first
-    items = items
-      .filter((item) => {
-        const exp = item.expiresAt ?? item.expires_at;
-        return !exp || exp > now;
-      })
-      .sort((a, b) => compareItemsBySortOrder(a, b, 'newest'));
-
-    if (items.length === 0 && clearRoomConfirmArmed) {
-      resetClearRoomConfirm();
-    }
-
-    // Update counts
-    countAll.textContent = items.length;
-    if (countPinned) {
-      countPinned.textContent = items.filter((i) => Boolean(i.pinned)).length;
-    }
-    countLink.textContent = items.filter((i) => i.type === 'link').length;
-    countNote.textContent = items.filter((i) => i.type === 'note').length;
-    countFile.textContent = items.filter((i) => i.type === 'file').length;
-
-    const filtered = items
+  function getFilteredSortedItems() {
+    return items
       .filter((item) => {
         if (activeFilter === 'pinned') {
           if (!item.pinned) return false;
@@ -974,6 +1037,129 @@
         return true;
       })
       .sort((a, b) => compareItemsBySortOrder(a, b, sortOrder));
+  }
+
+  function updateBatchActionBar(visibleItems) {
+    if (!batchActionBar) return;
+    const count = selectedItemIds.size;
+    if (count === 0) {
+      batchActionBar.style.display = 'none';
+      batchActionBar.classList.remove('active');
+      if (batchSelectedCount) {
+        batchSelectedCount.textContent = 'Đã chọn 0 mục';
+      }
+      if (batchSelectAllBtn) {
+        batchSelectAllBtn.textContent = '☑️ Chọn tất cả';
+      }
+      return;
+    }
+    batchActionBar.style.display = 'flex';
+    batchActionBar.classList.add('active');
+    if (batchSelectedCount) {
+      batchSelectedCount.textContent = `Đã chọn ${count} mục`;
+    }
+    if (batchSelectAllBtn) {
+      const list = Array.isArray(visibleItems) ? visibleItems : getFilteredSortedItems();
+      const allVisibleSelected = list.length > 0 && list.every((i) => selectedItemIds.has(i.id));
+      batchSelectAllBtn.textContent = allVisibleSelected ? '☑️ Bỏ chọn tất cả' : '☑️ Chọn tất cả';
+    }
+  }
+
+  function toggleSelectAllVisibleItems() {
+    const visible = getFilteredSortedItems();
+    if (visible.length === 0) return;
+    const allVisibleSelected = visible.every((i) => selectedItemIds.has(i.id));
+    if (allVisibleSelected) {
+      visible.forEach((i) => selectedItemIds.delete(i.id));
+    } else {
+      visible.forEach((i) => selectedItemIds.add(i.id));
+    }
+    renderItems();
+  }
+
+  async function batchCopySelectedItems() {
+    if (selectedItemIds.size === 0) return;
+    const visibleOrder = getFilteredSortedItems().filter((i) => selectedItemIds.has(i.id));
+    const visibleSet = new Set(visibleOrder.map((i) => i.id));
+    const hiddenSelected = items.filter((i) => selectedItemIds.has(i.id) && !visibleSet.has(i.id));
+    const selectedList = [...visibleOrder, ...hiddenSelected];
+    if (selectedList.length === 0) return;
+
+    const shareOrigin = getShareOrigin();
+    const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+    const combinedText = selectedList.map((item) => {
+      if (item.type === 'file') {
+        return isCloud
+          ? `${shareOrigin}/?room=${encodeURIComponent(currentRoom)}&download=${encodeURIComponent(item.id)}`
+          : `${shareOrigin}/api/files/${encodeURIComponent(item.id)}/download`;
+      }
+      return String(item.content || '');
+    }).filter(Boolean).join('\n\n');
+
+    await copyToClipboard(combinedText, batchCopySelectedBtn);
+    showToast(`📋 Đã sao chép ${selectedList.length} mục đã chọn!`);
+  }
+
+  async function batchDeleteSelectedItems() {
+    const idsToDelete = Array.from(selectedItemIds);
+    if (idsToDelete.length === 0) return;
+    if (batchDeleteSelectedBtn) batchDeleteSelectedBtn.disabled = true;
+    let deletedCount = 0;
+    try {
+      for (const id of idsToDelete) {
+        try {
+          const res = await fetch(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          if (res.ok) {
+            items = items.filter((i) => i.id !== id);
+            expandedNoteIds.delete(id);
+            selectedItemIds.delete(id);
+            deletedCount++;
+          }
+        } catch (_) {}
+      }
+      renderItems();
+      if (deletedCount > 0) {
+        showToast(`🗑️ Đã xóa ${deletedCount} mục đã chọn!`);
+      }
+    } finally {
+      if (batchDeleteSelectedBtn) batchDeleteSelectedBtn.disabled = false;
+    }
+  }
+
+  function renderItems() {
+    const now = Date.now();
+    // Filter out expired items client-side too, and sort pinned items first
+    items = items
+      .filter((item) => {
+        const exp = item.expiresAt ?? item.expires_at;
+        return !exp || exp > now;
+      })
+      .sort((a, b) => compareItemsBySortOrder(a, b, 'newest'));
+
+    if (selectedItemIds.size > 0) {
+      const validIds = new Set(items.map((i) => i.id));
+      for (const selId of Array.from(selectedItemIds)) {
+        if (!validIds.has(selId)) {
+          selectedItemIds.delete(selId);
+        }
+      }
+    }
+
+    if (items.length === 0 && clearRoomConfirmArmed) {
+      resetClearRoomConfirm();
+    }
+
+    // Update counts
+    countAll.textContent = items.length;
+    if (countPinned) {
+      countPinned.textContent = items.filter((i) => Boolean(i.pinned)).length;
+    }
+    countLink.textContent = items.filter((i) => i.type === 'link').length;
+    countNote.textContent = items.filter((i) => i.type === 'note').length;
+    countFile.textContent = items.filter((i) => i.type === 'file').length;
+
+    const filtered = getFilteredSortedItems();
+    updateBatchActionBar(filtered);
 
     if (filtered.length === 0) {
       if (items.length > 0) {
@@ -1141,11 +1327,13 @@
     const qrTarget = item.type === 'file' ? previewUrl : (item.content || '');
     const safeLinkHref = item.type === 'link' ? sanitizeUrl(item.content) : '#';
     const isPinned = Boolean(item.pinned);
+    const isSelected = selectedItemIds.has(item.id);
 
     return `
-      <article class="item-card ${isPinned ? 'pinned' : ''}" data-id="${escapeHtml(item.id)}">
+      <article class="item-card ${isPinned ? 'pinned' : ''} ${isSelected ? 'selected' : ''}" data-id="${escapeHtml(item.id)}">
         <div class="item-top">
           <div class="item-meta">
+            <input type="checkbox" class="item-select-cb js-select-item-cb" data-id="${escapeHtml(item.id)}" ${isSelected ? 'checked' : ''} title="Chọn mục này để thao tác hàng loạt" aria-label="Chọn mục" />
             ${isPinned ? '<span class="pin-badge">📌 Đã ghim</span>' : ''}
             <span class="type-badge ${badgeClass}">${badgeLabel}</span>
             <span class="time-badge">🕒 ${formatRelativeTime(createdAt)}</span>
@@ -1525,6 +1713,7 @@
           if (!msg.room || msg.room === currentRoom) {
             items = [];
             expandedNoteIds.clear();
+            selectedItemIds.clear();
             renderItems();
           }
         }
@@ -1601,6 +1790,7 @@
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
     resetClearRoomConfirm();
     expandedNoteIds.clear();
+    selectedItemIds.clear();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: 'leave', room: currentRoom }));
       ws.send(JSON.stringify({ action: 'join', room: clean }));
@@ -1830,6 +2020,20 @@
 
   // Delegated Card Actions
   itemsContainer.addEventListener('click', (e) => {
+    const selectCb = e.target.closest('.js-select-item-cb, .item-select-cb');
+    if (selectCb) {
+      const selId = selectCb.getAttribute('data-id');
+      if (selId) {
+        if (selectedItemIds.has(selId)) {
+          selectedItemIds.delete(selId);
+        } else {
+          selectedItemIds.add(selId);
+        }
+        renderItems();
+      }
+      return;
+    }
+
     const resetFilterBtn = e.target.closest('.js-reset-filter-btn');
     if (resetFilterBtn) {
       activeFilter = 'all';
@@ -1947,6 +2151,29 @@
     }
   });
 
+  // Batch Action Bar Buttons
+  if (batchSelectAllBtn) {
+    batchSelectAllBtn.addEventListener('click', () => {
+      toggleSelectAllVisibleItems();
+    });
+  }
+  if (batchCopySelectedBtn) {
+    batchCopySelectedBtn.addEventListener('click', () => {
+      batchCopySelectedItems();
+    });
+  }
+  if (batchDeleteSelectedBtn) {
+    batchDeleteSelectedBtn.addEventListener('click', () => {
+      batchDeleteSelectedItems();
+    });
+  }
+  if (batchClearSelectionBtn) {
+    batchClearSelectionBtn.addEventListener('click', () => {
+      selectedItemIds.clear();
+      renderItems();
+    });
+  }
+
   // Filter Tabs & Search
   function activateFilterTab(filterValue, tabEl) {
     filterTabs.forEach((t) => t.classList.remove('active'));
@@ -1988,6 +2215,12 @@
   });
 
   // Header Buttons & Modals
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', () => {
+      toggleTheme();
+    });
+  }
+
   if (telemetryToggleBtn && telemetryDashboard) {
     telemetryToggleBtn.addEventListener('click', () => {
       telemetryDashboard.classList.toggle('collapsed');
@@ -2209,6 +2442,7 @@
   }
 
   // Initialize
+  applyTheme(getInitialTheme(), false);
   currentRoomBadge.textContent = currentRoom;
   recordRecentRoom(currentRoom);
   updateComposerCounter();

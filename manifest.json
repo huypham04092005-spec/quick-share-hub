@@ -21,5 +21,29 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "params": {
+      "title": "shared_title",
+      "text": "shared_text",
+      "url": "shared_url"
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "Phòng mặc định (default)",
+      "short_name": "Phòng chính",
+      "description": "Mở nhanh phòng chia sẻ mặc định",
+      "url": "./",
+      "icons": [
+        {
+          "src": "icons/icon-192.svg",
+          "sizes": "192x192",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
   ]
 }
