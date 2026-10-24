@@ -40,6 +40,29 @@
   const countNote = document.getElementById('countNote');
   const countFile = document.getElementById('countFile');
 
+  // Storage & Bandwidth Dashboard Elements
+  const telemetryDashboard = document.getElementById('telemetryDashboard');
+  const telemetryToggleBtn = document.getElementById('telemetryToggleBtn');
+  const cleanupStorageBtn = document.getElementById('cleanupStorageBtn');
+  const resetBandwidthBtn = document.getElementById('resetBandwidthBtn');
+  const statStoragePercent = document.getElementById('statStoragePercent');
+  const statStorageUsed = document.getElementById('statStorageUsed');
+  const statStorageQuota = document.getElementById('statStorageQuota');
+  const storageQuotaBar = document.getElementById('storageQuotaBar');
+  const statStorageBreakdown = document.getElementById('statStorageBreakdown');
+  const statBandwidthPercent = document.getElementById('statBandwidthPercent');
+  const statBandwidthTotal = document.getElementById('statBandwidthTotal');
+  const statBandwidthQuota = document.getElementById('statBandwidthQuota');
+  const bandwidthQuotaBar = document.getElementById('bandwidthQuotaBar');
+  const statBandwidthSplit = document.getElementById('statBandwidthSplit');
+  const statPageFootprint = document.getElementById('statPageFootprint');
+  const statNetworkRequests = document.getElementById('statNetworkRequests');
+  const statTransferBreakdown = document.getElementById('statTransferBreakdown');
+  const statTotalItemsCount = document.getElementById('statTotalItemsCount');
+  const statTypeFileBytes = document.getElementById('statTypeFileBytes');
+  const statTypeNoteBytes = document.getElementById('statTypeNoteBytes');
+  const statTypeLinkBytes = document.getElementById('statTypeLinkBytes');
+
   // Modals
   const qrModal = document.getElementById('qrModal');
   const qrModalTitle = document.getElementById('qrModalTitle');
@@ -369,11 +392,46 @@
           <div style="font-size: 0.82rem; margin-top: 4px;">Dán Link, Ghi chú hoặc tải lên file PDF để đồng bộ tức thì sang thiết bị khác!</div>
         </div>
       `;
+      updateTelemetryDashboard();
       return;
     }
 
     itemsContainer.innerHTML = filtered.map((item) => renderSingleCard(item)).join('');
     hydrateCloudImages();
+    updateTelemetryDashboard();
+  }
+
+  function updateTelemetryDashboard() {
+    if (!statStorageUsed || !window.QSHCloud || typeof window.QSHCloud.getTelemetrySnapshot !== 'function') {
+      return;
+    }
+    const snap = window.QSHCloud.getTelemetrySnapshot(currentRoom, items);
+    if (!snap) return;
+
+    const { storage, bandwidth } = snap;
+    const sPct = storage.percentUsed < 0.1 && storage.usedBytes > 0 ? '< 0.1%' : `${storage.percentUsed.toFixed(1)}%`;
+    const bPct = bandwidth.percentUsed < 0.1 && bandwidth.totalBytes > 0 ? '< 0.1%' : `${bandwidth.percentUsed.toFixed(2)}%`;
+
+    statStoragePercent.textContent = sPct;
+    statStorageUsed.textContent = formatBytes(storage.usedBytes);
+    statStorageQuota.textContent = formatBytes(storage.quotaBytes);
+    storageQuotaBar.style.width = `${Math.max(1.5, Math.min(100, storage.percentUsed))}%`;
+    statStorageBreakdown.textContent = `Dữ liệu phòng "${currentRoom}": ${formatBytes(storage.roomBytes)} • Còn trống: ${formatBytes(storage.freeBytes)}`;
+
+    statBandwidthPercent.textContent = bPct;
+    statBandwidthTotal.textContent = formatBytes(bandwidth.totalBytes);
+    statBandwidthQuota.textContent = formatBytes(bandwidth.quotaBytes);
+    bandwidthQuotaBar.style.width = `${Math.max(1.5, Math.min(100, bandwidth.percentUsed))}%`;
+    statBandwidthSplit.textContent = `⬆ Tải lên: ${formatBytes(bandwidth.uploadBytes)} • ⬇ Tải xuống: ${formatBytes(bandwidth.downloadBytes)}`;
+
+    statPageFootprint.textContent = formatBytes(storage.pageFootprintBytes);
+    statNetworkRequests.textContent = `${bandwidth.apiRequests} API Requests • ${bandwidth.wsEvents} Sự kiện Realtime WS`;
+    statTransferBreakdown.textContent = `Tài nguyên trang (${bandwidth.resourceCount} files HTML/CSS/JS/PWA): ${formatBytes(storage.pageFootprintBytes)}`;
+
+    statTotalItemsCount.textContent = `${storage.breakdown.totalItems} mục`;
+    statTypeFileBytes.textContent = `${formatBytes(storage.breakdown.fileBytes)} (${storage.breakdown.fileCount})`;
+    statTypeNoteBytes.textContent = `${formatBytes(storage.breakdown.noteBytes)} (${storage.breakdown.noteCount})`;
+    statTypeLinkBytes.textContent = `${formatBytes(storage.breakdown.linkBytes)} (${storage.breakdown.linkCount})`;
   }
 
   function hydrateCloudImages() {
@@ -587,6 +645,10 @@
 
     ws.onmessage = (event) => {
       try {
+        if (window.QSHCloud && typeof window.QSHCloud.recordTraffic === 'function') {
+          const byteLen = event.data ? String(event.data).length : 64;
+          window.QSHCloud.recordTraffic({ downloadBytes: byteLen, wsEvents: 1 });
+        }
         const msg = JSON.parse(event.data);
         if (msg.type === 'item_created' && msg.item) {
           if ((msg.item.room || 'default') === currentRoom) {
@@ -785,6 +847,37 @@
   });
 
   // Header Buttons & Modals
+  if (telemetryToggleBtn && telemetryDashboard) {
+    telemetryToggleBtn.addEventListener('click', () => {
+      telemetryDashboard.classList.toggle('collapsed');
+      updateTelemetryDashboard();
+    });
+  }
+
+  if (cleanupStorageBtn) {
+    cleanupStorageBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/cleanup', { method: 'POST' });
+        const data = await res.json();
+        await fetchItems();
+        updateTelemetryDashboard();
+        showToast(`🧹 Đã dọn dẹp ${data.deletedCount || 0} mục hết hạn & giải phóng bộ nhớ!`);
+      } catch (_) {
+        showToast('❌ Không thể dọn dẹp bộ nhớ');
+      }
+    });
+  }
+
+  if (resetBandwidthBtn) {
+    resetBandwidthBtn.addEventListener('click', () => {
+      if (window.QSHCloud && typeof window.QSHCloud.resetTelemetry === 'function') {
+        window.QSHCloud.resetTelemetry();
+        updateTelemetryDashboard();
+        showToast('🔄 Đã đặt lại bộ đếm băng thông phiên!');
+      }
+    });
+  }
+
   roomQrBtn.addEventListener('click', () => {
     openQrModal(getShareRoomUrl(), `Phòng "${currentRoom}"`);
   });

@@ -34,6 +34,10 @@
           <strong id="currentRoomBadge">default</strong>
         </button>
 
+        <button id="telemetryToggleBtn" type="button" class="btn btn-sm" title="Ẩn/Hiện Dashboard theo dõi dung lượng trang &amp; băng thông">
+          📊 Dung lượng &amp; Băng thông
+        </button>
+
         <button id="roomQrBtn" type="button" class="btn btn-sm btn-primary" title="Mở mã QR để quét bằng điện thoại">
           📱 Mã QR Điện Thoại
         </button>
@@ -43,6 +47,101 @@
         </button>
       </div>
     </header>
+
+    <!-- Storage Capacity & Bandwidth Monitoring Dashboard -->
+    <section id="telemetryDashboard" class="telemetry-dashboard" aria-label="Dashboard theo dõi dung lượng trang và băng thông">
+      <div class="telemetry-header">
+        <div class="telemetry-title-group">
+          <div class="telemetry-title">📊 Dashboard Theo Dõi Dung Lượng Trang &amp; Băng Thông</div>
+          <span id="cloudPlatformBadge" class="cloud-badge-247">☁️ Cloud 24/7 Active (Chạy độc lập khi tắt PC)</span>
+        </div>
+        <div class="telemetry-actions">
+          <button id="cleanupStorageBtn" type="button" class="btn btn-sm" title="Dọn dẹp các mục đã hết hạn để giải phóng dung lượng">
+            🧹 Dọn mục hết hạn
+          </button>
+          <button id="resetBandwidthBtn" type="button" class="btn btn-sm" title="Đặt lại bộ đếm băng thông phiên">
+            🔄 Đặt lại bộ đếm
+          </button>
+        </div>
+      </div>
+
+      <div class="telemetry-body">
+        <div class="telemetry-grid">
+          <!-- Card 1: Storage Capacity -->
+          <div class="metric-card">
+            <div class="metric-label">
+              <span>💾 Dung Lượng Lưu Trữ</span>
+              <span id="statStoragePercent">0.0%</span>
+            </div>
+            <div class="metric-value">
+              <span id="statStorageUsed">0 B</span>
+              <span style="font-size: 0.78rem; font-weight: 500; color: var(--text-secondary);">/ <span id="statStorageQuota">500 MB</span></span>
+            </div>
+            <div class="quota-bar-track">
+              <div id="storageQuotaBar" class="quota-bar-fill" style="width: 1%;"></div>
+            </div>
+            <div id="statStorageBreakdown" class="metric-sub">
+              Phòng này: 0 B • Còn trống: 500 MB
+            </div>
+          </div>
+
+          <!-- Card 2: Total Bandwidth (Upload + Download) -->
+          <div class="metric-card">
+            <div class="metric-label">
+              <span>📡 Băng Thông Đã Dùng</span>
+              <span id="statBandwidthPercent">0.0%</span>
+            </div>
+            <div class="metric-value">
+              <span id="statBandwidthTotal">0 B</span>
+              <span style="font-size: 0.78rem; font-weight: 500; color: var(--text-secondary);">/ <span id="statBandwidthQuota">100 GB</span></span>
+            </div>
+            <div class="quota-bar-track">
+              <div id="bandwidthQuotaBar" class="quota-bar-fill bandwidth" style="width: 1%;"></div>
+            </div>
+            <div id="statBandwidthSplit" class="metric-sub">
+              ⬆ Tải lên: 0 B • ⬇ Tải xuống: 0 B
+            </div>
+          </div>
+
+          <!-- Card 3: Network Traffic & Page Footprint -->
+          <div class="metric-card">
+            <div class="metric-label">
+              <span>⚡ Lưu Lượng &amp; Dung Lượng Trang</span>
+              <span id="statLiveSpeedBadge" style="color: var(--accent-emerald);">Trực tuyến</span>
+            </div>
+            <div id="statPageFootprint" class="metric-value">0 KB</div>
+            <div id="statNetworkRequests" class="metric-sub">
+              0 API Requests • 0 Sự kiện Realtime WS
+            </div>
+            <div id="statTransferBreakdown" class="metric-sub">
+              Tài nguyên trang (HTML/CSS/JS): Đang đo...
+            </div>
+          </div>
+
+          <!-- Card 4: Content Type Storage Breakdown -->
+          <div class="metric-card">
+            <div class="metric-label">
+              <span>📂 Phân Bổ Theo Loại Nội Dung</span>
+              <span id="statTotalItemsCount">0 mục</span>
+            </div>
+            <div class="type-breakdown-list">
+              <div class="type-breakdown-row">
+                <span>📕 PDF &amp; File tải lên:</span>
+                <strong id="statTypeFileBytes">0 B (0)</strong>
+              </div>
+              <div class="type-breakdown-row">
+                <span>📝 Ghi chú &amp; Clipboard:</span>
+                <strong id="statTypeNoteBytes">0 B (0)</strong>
+              </div>
+              <div class="type-breakdown-row">
+                <span>🔗 Liên kết (Links):</span>
+                <strong id="statTypeLinkBytes">0 B (0)</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- Composer & File Upload Grid -->
     <section class="composer-grid">

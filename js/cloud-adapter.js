@@ -651,7 +651,7 @@
   // ---------------------------------------------------------------------------
   const localWsClients = new Set();
   let broadcastChannel = null;
-  if (typeof BroadcastChannel !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof window.document !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
     try {
       broadcastChannel = new BroadcastChannel('quick_share_hub_247_channel');
       broadcastChannel.onmessage = (ev) => {
@@ -1311,12 +1311,203 @@
       });
     }
 
-    // 9. API 404 fallback
+    // 9. GET /api/stats (Storage Capacity & Bandwidth Dashboard API)
+    if (apiPath === '/api/stats') {
+      const room = normalizeRoom(urlObj.searchParams.get('room'));
+      return makeJsonResponse({
+        success: true,
+        ...getTelemetrySnapshot(room)
+      }, 200);
+    }
+
+    // 10. API 404 fallback
     return makeJsonResponse({
       success: false,
       error: `Endpoint ${upperMethod} ${apiPath} not found`
     }, 404);
   }
+
+  // ---------------------------------------------------------------------------
+  // Storage Capacity & Bandwidth Telemetry Engine
+  // ---------------------------------------------------------------------------
+  const STORAGE_QUOTA_BYTES = 500 * 1024 * 1024; // 500 MB Cloud Storage Quota
+  const BANDWIDTH_QUOTA_BYTES = 100 * 1024 * 1024 * 1024; // 100 GB Monthly Cloud Bandwidth Quota
+  const TELEMETRY_STORAGE_KEY = 'qsh_telemetry_stats_v1';
+
+  const telemetry = {
+    bytesUploaded: 0,
+    bytesDownloaded: 0,
+    apiRequests: 0,
+    wsEvents: 0,
+    startedAt: Date.now()
+  };
+
+  function loadPersistedTelemetry() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(TELEMETRY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          telemetry.bytesUploaded = Number(parsed.bytesUploaded) || 0;
+          telemetry.bytesDownloaded = Number(parsed.bytesDownloaded) || 0;
+          telemetry.apiRequests = Number(parsed.apiRequests) || 0;
+          telemetry.wsEvents = Number(parsed.wsEvents) || 0;
+          telemetry.startedAt = Number(parsed.startedAt) || Date.now();
+        }
+      }
+    } catch (_) {}
+  }
+
+  function savePersistedTelemetry() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(telemetry));
+    } catch (_) {}
+  }
+
+  function recordTraffic({ uploadBytes = 0, downloadBytes = 0, apiRequests = 0, wsEvents = 0 }) {
+    if (uploadBytes > 0) telemetry.bytesUploaded += uploadBytes;
+    if (downloadBytes > 0) telemetry.bytesDownloaded += downloadBytes;
+    if (apiRequests > 0) telemetry.apiRequests += apiRequests;
+    if (wsEvents > 0) telemetry.wsEvents += wsEvents;
+    savePersistedTelemetry();
+  }
+
+  function resetTelemetry() {
+    telemetry.bytesUploaded = 0;
+    telemetry.bytesDownloaded = 0;
+    telemetry.apiRequests = 0;
+    telemetry.wsEvents = 0;
+    telemetry.startedAt = Date.now();
+    savePersistedTelemetry();
+  }
+
+  function estimateItemBytes(item) {
+    if (!item) return 0;
+    if (item.type === 'file') {
+      const fSize = Number(item.fileSize ?? item.file_size ?? 0);
+      return fSize > 0 ? fSize : 1024;
+    }
+    const contentStr = String(item.content || '');
+    const titleStr = String(item.title || '');
+    return new Blob([contentStr, titleStr]).size + 128;
+  }
+
+  function measureBrowserPageFootprint() {
+    if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') {
+      return { pageBytes: 112 * 1024, resourceCount: 6 };
+    }
+    try {
+      let total = 0;
+      let count = 0;
+      const navEntries = performance.getEntriesByType('navigation') || [];
+      for (const n of navEntries) {
+        total += (n.decodedBodySize || n.transferSize || 8200);
+        count++;
+      }
+      const resEntries = performance.getEntriesByType('resource') || [];
+      for (const r of resEntries) {
+        total += (r.decodedBodySize || r.transferSize || 0);
+        count++;
+      }
+      if (total < 95000) {
+        // Fallback estimate for HTML (9KB) + CSS (14KB) + QRCode (75KB) + CloudAdapter (52KB) + App (28KB)
+        total = Math.max(total, 178 * 1024);
+      }
+      return { pageBytes: total, resourceCount: Math.max(count, 6) };
+    } catch (_) {
+      return { pageBytes: 178 * 1024, resourceCount: 6 };
+    }
+  }
+
+  function getTelemetrySnapshot(room = 'default', overrideRoomItems = null) {
+    const now = Date.now();
+    const normalizedRoom = normalizeRoom(room);
+    const activeRoomItems = Array.isArray(overrideRoomItems)
+      ? overrideRoomItems
+      : getRoomListRef(normalizedRoom).filter((i) => !i.expiresAt || i.expiresAt > now);
+
+    let roomBytes = 0;
+    let fileBytes = 0;
+    let noteBytes = 0;
+    let linkBytes = 0;
+    let fileCount = 0;
+    let noteCount = 0;
+    let linkCount = 0;
+
+    for (const item of activeRoomItems) {
+      const sz = estimateItemBytes(item);
+      roomBytes += sz;
+      if (item.type === 'file') {
+        fileBytes += sz;
+        fileCount++;
+      } else if (item.type === 'link') {
+        linkBytes += sz;
+        linkCount++;
+      } else {
+        noteBytes += sz;
+        noteCount++;
+      }
+    }
+
+    let totalAllRoomsBytes = 0;
+    let totalAllRoomsItems = 0;
+    for (const [rName, list] of cloudState.rooms.entries()) {
+      if (rName === normalizedRoom && Array.isArray(overrideRoomItems)) continue;
+      for (const item of list) {
+        if (!item.expiresAt || item.expiresAt > now) {
+          totalAllRoomsBytes += estimateItemBytes(item);
+          totalAllRoomsItems++;
+        }
+      }
+    }
+    if (Array.isArray(overrideRoomItems)) {
+      totalAllRoomsBytes += roomBytes;
+      totalAllRoomsItems += activeRoomItems.length;
+    } else if (totalAllRoomsBytes < roomBytes) {
+      totalAllRoomsBytes = roomBytes;
+    }
+
+    const { pageBytes, resourceCount } = measureBrowserPageFootprint();
+    const totalStorageUsed = totalAllRoomsBytes + pageBytes;
+    const totalDownloadBytes = telemetry.bytesDownloaded + pageBytes;
+    const totalUploadBytes = telemetry.bytesUploaded;
+    const totalBandwidthBytes = totalUploadBytes + totalDownloadBytes;
+
+    return {
+      storage: {
+        usedBytes: totalStorageUsed,
+        roomBytes,
+        pageFootprintBytes: pageBytes,
+        quotaBytes: STORAGE_QUOTA_BYTES,
+        freeBytes: Math.max(0, STORAGE_QUOTA_BYTES - totalStorageUsed),
+        percentUsed: Math.min(100, (totalStorageUsed / STORAGE_QUOTA_BYTES) * 100),
+        breakdown: {
+          fileBytes,
+          fileCount,
+          noteBytes,
+          noteCount,
+          linkBytes,
+          linkCount,
+          totalItems: activeRoomItems.length,
+          allRoomsItems: totalAllRoomsItems
+        }
+      },
+      bandwidth: {
+        totalBytes: totalBandwidthBytes,
+        uploadBytes: totalUploadBytes,
+        downloadBytes: totalDownloadBytes,
+        quotaBytes: BANDWIDTH_QUOTA_BYTES,
+        percentUsed: Math.min(100, (totalBandwidthBytes / BANDWIDTH_QUOTA_BYTES) * 100),
+        apiRequests: telemetry.apiRequests,
+        wsEvents: telemetry.wsEvents,
+        resourceCount
+      }
+    };
+  }
+
+  loadPersistedTelemetry();
 
   // ---------------------------------------------------------------------------
   // Browser & Node Interception Wiring
@@ -1359,14 +1550,32 @@
         parsedUrl = new URL(urlStr, base);
       } catch (_) {}
 
-      if (parsedUrl && isCloudUrl(parsedUrl.href)) {
-        // Intercept all /api/* requests on the 24/7 Cloud URL
-        if (parsedUrl.pathname.includes('/api/') || parsedUrl.pathname.endsWith('/api')) {
-          return handleCloudApiRequest(parsedUrl, method, init || {});
+      // Estimate outbound request payload size
+      let reqBytes = 0;
+      if (init && init.body) {
+        if (typeof init.body === 'string') {
+          reqBytes = init.body.length;
+        } else if (typeof FormData !== 'undefined' && init.body instanceof FormData) {
+          const f = init.body.get('file');
+          if (f && typeof f.size === 'number') reqBytes = f.size;
         }
       }
 
-      return nativeFetch(input, init);
+      if (parsedUrl && isCloudUrl(parsedUrl.href)) {
+        if (parsedUrl.pathname.includes('/api/') || parsedUrl.pathname.endsWith('/api')) {
+          const res = await handleCloudApiRequest(parsedUrl, method, init || {});
+          const cl = Number(res.headers.get('content-length')) || 512;
+          recordTraffic({ uploadBytes: reqBytes, downloadBytes: cl, apiRequests: 1 });
+          return res;
+        }
+      }
+
+      const res = await nativeFetch(input, init);
+      if (parsedUrl && parsedUrl.pathname.includes('/api/')) {
+        const cl = Number(res.headers.get('content-length')) || 512;
+        recordTraffic({ uploadBytes: reqBytes, downloadBytes: cl, apiRequests: 1 });
+      }
+      return res;
     };
   }
 
@@ -1396,6 +1605,7 @@
       fileEntry = await fetchBinaryFileFromCloudGist(found.item.fileGistId || found.item.filePath);
       if (fileEntry) {
         cloudState.files.set(id, fileEntry);
+        recordTraffic({ downloadBytes: fileEntry.bytes ? fileEntry.bytes.byteLength : 0 });
       }
     }
     if (!fileEntry || !fileEntry.bytes) return null;
@@ -1413,10 +1623,14 @@
     isCloudMode: isCloudHost,
     getBlobUrlForFile,
     flushDirtyRoomsToGist,
-    fetchCloudGistState
+    fetchCloudGistState,
+    getTelemetrySnapshot,
+    recordTraffic,
+    resetTelemetry
   };
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = global.QSHCloud;
   }
 })(typeof window !== 'undefined' ? window : globalThis);
+
