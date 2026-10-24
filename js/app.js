@@ -331,6 +331,34 @@
     showToast('📋 Đã sao chép vào Clipboard!');
   }
 
+  async function convertImageBlobToPng(blob) {
+    try {
+      if (typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && typeof Image === 'function') {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas && typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
+        if (ctx && typeof canvas.toBlob === 'function') {
+          const objUrl = URL.createObjectURL(blob);
+          try {
+            const img = await new Promise((resolve, reject) => {
+              const el = new Image();
+              el.onload = () => resolve(el);
+              el.onerror = reject;
+              el.src = objUrl;
+            });
+            canvas.width = img.naturalWidth || img.width || 1;
+            canvas.height = img.naturalHeight || img.height || 1;
+            ctx.drawImage(img, 0, 0);
+            const pngBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+            if (pngBlob) return pngBlob;
+          } finally {
+            if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(objUrl);
+          }
+        }
+      }
+    } catch (_) {}
+    return new Blob([blob], { type: 'image/png' });
+  }
+
   async function copyImageToClipboard(id, buttonEl) {
     if (!id) return;
     const item = items.find((i) => i.id === id);
@@ -354,7 +382,17 @@
         ? ClipboardItem
         : (window && typeof window.ClipboardItem === 'function' ? window.ClipboardItem : null);
       if (navigator.clipboard && typeof navigator.clipboard.write === 'function' && Ctor) {
-        await navigator.clipboard.write([new Ctor({ [typedBlob.type || 'image/png']: typedBlob })]);
+        const primaryType = typedBlob.type || 'image/png';
+        try {
+          await navigator.clipboard.write([new Ctor({ [primaryType]: typedBlob })]);
+        } catch (writeErr) {
+          if (primaryType !== 'image/png') {
+            const pngBlob = await convertImageBlobToPng(typedBlob);
+            await navigator.clipboard.write([new Ctor({ 'image/png': pngBlob })]);
+          } else {
+            throw writeErr;
+          }
+        }
         if (buttonEl) {
           const original = buttonEl.innerHTML;
           buttonEl.innerHTML = '✅ Đã copy ảnh!';
@@ -535,6 +573,7 @@
       });
       if (res.ok) {
         items = [];
+        expandedNoteIds.clear();
         renderItems();
         showToast(`🗑️ Đã xóa toàn bộ mục trong phòng "${currentRoom}"`);
       }
@@ -833,18 +872,26 @@
     } else {
       items.unshift(newItem);
     }
+    if (newItem && newItem.id && expandedNoteIds.has(newItem.id)) {
+      const raw = String(newItem.content || '');
+      const lines = raw ? raw.split(/\r?\n/).length : 1;
+      if (newItem.type !== 'note' || (raw.length <= 900 && lines <= 14)) {
+        expandedNoteIds.delete(newItem.id);
+      }
+    }
     renderItems();
   }
 
   function removeItemFromState(id) {
     items = items.filter((i) => i.id !== id);
+    expandedNoteIds.delete(id);
     renderItems();
   }
 
   // Render UI
   function getItemSortSize(item) {
-    const fSize = item.fileSize ?? item.file_size;
-    if (typeof fSize === 'number' && Number.isFinite(fSize) && fSize >= 0) {
+    const fSize = Number(item.fileSize ?? item.file_size);
+    if (Number.isFinite(fSize) && (fSize > 0 || (item.type === 'file' && fSize === 0))) {
       return fSize;
     }
     return String(item.content || '').length;
@@ -863,10 +910,10 @@
       return 0;
     }
     if (order === 'expiring') {
-      const expA = a.expiresAt ?? a.expires_at;
-      const expB = b.expiresAt ?? b.expires_at;
-      const hasExpA = typeof expA === 'number' && Number.isFinite(expA) && expA > 0;
-      const hasExpB = typeof expB === 'number' && Number.isFinite(expB) && expB > 0;
+      const expA = Number(a.expiresAt ?? a.expires_at);
+      const expB = Number(b.expiresAt ?? b.expires_at);
+      const hasExpA = Number.isFinite(expA) && expA > 0;
+      const hasExpB = Number.isFinite(expB) && expB > 0;
       if (hasExpA && hasExpB) {
         if (expA !== expB) return expA - expB;
       } else if (hasExpA !== hasExpB) {
@@ -1011,7 +1058,7 @@
     const lowerName = String(fileName).toLowerCase();
     const isPdf = Boolean(item.isPdf || item.is_pdf || lowerName.endsWith('.pdf'));
     const mime = item.mimeType || item.mime_type || '';
-    const isImage = item.type === 'file' && (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isImage = item.type === 'file' && !isPdf && (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
     const isTextPreviewable = item.type === 'file' && !isPdf && !isImage && (
       mime.startsWith('text/') ||
       mime.includes('json') ||
@@ -1477,6 +1524,7 @@
         } else if (msg.type === 'room_cleared') {
           if (!msg.room || msg.room === currentRoom) {
             items = [];
+            expandedNoteIds.clear();
             renderItems();
           }
         }
@@ -1552,6 +1600,7 @@
   function switchRoom(newRoom) {
     const clean = (newRoom && newRoom.trim()) ? newRoom.trim().toLowerCase() : 'default';
     resetClearRoomConfirm();
+    expandedNoteIds.clear();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ action: 'leave', room: currentRoom }));
       ws.send(JSON.stringify({ action: 'join', room: clean }));
