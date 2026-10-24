@@ -11,6 +11,8 @@
   let reconnectTimer = null;
   let reconnectAttempts = 0;
   let currentQrText = '';
+  let currentQrTitle = '';
+  let currentQrDataUrl = '';
   let publicOrigin = '';
 
   // DOM Elements
@@ -567,6 +569,7 @@
     const item = items.find((i) => i.id === id);
     if (!item || !editModal || !editItemTextarea) return;
     editingItemId = id;
+    const fileName = item.fileName || item.file_name || item.title || '';
     if (editModalTitle) {
       editModalTitle.textContent = item.type === 'file'
         ? '✏️ Chỉnh sửa ghi chú & Thời hạn File'
@@ -575,7 +578,12 @@
     if (editItemTtlSelect) {
       editItemTtlSelect.value = 'keep';
     }
-    editItemTextarea.value = item.content || '';
+    editItemTextarea.placeholder = item.type === 'file'
+      ? 'Nhập ghi chú đính kèm cho file (để trống nếu không cần)...'
+      : 'Nhập nội dung mới...';
+    editItemTextarea.value = (item.type === 'file' && item.content === fileName)
+      ? ''
+      : (item.content || '');
     editModal.classList.add('open');
     editItemTextarea.focus();
   }
@@ -794,7 +802,7 @@
               </div>
             </div>
           </div>
-          ${hasCaption ? `<div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary);">${escapeHtml(item.content)}</div>` : ''}
+          ${hasCaption ? `<div style="margin-top: 6px; font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap;">${renderNoteContentWithLinks(item.content)}</div>` : ''}
           ${isImage ? `<img src="${isCloud ? '' : localPreviewUrl}" data-cloud-image-id="${escapeHtml(item.id)}" alt="${escapeHtml(fileName)}" class="item-image-preview" loading="lazy" />` : ''}
         </div>
       `;
@@ -952,6 +960,8 @@
   // QR Modal
   async function openQrModal(text, title) {
     currentQrText = text;
+    currentQrTitle = title || '';
+    currentQrDataUrl = '';
     qrModalTitle.textContent = title ? `📱 Mã QR: ${title}` : '📱 Quét mã QR trên Điện thoại';
     qrCaption.textContent = text;
     qrImage.src = '';
@@ -961,6 +971,7 @@
       const res = await fetch(`/api/qr?text=${encodeURIComponent(text)}`);
       const data = await res.json();
       if (data.success && data.dataUrl) {
+        currentQrDataUrl = data.dataUrl;
         qrImage.src = data.dataUrl;
       }
     } catch (err) {
@@ -969,14 +980,21 @@
   }
 
   function downloadQrCodePng() {
-    if (!qrImage || !qrImage.src) {
+    const srcUrl = currentQrDataUrl || (qrImage && qrImage.src) || '';
+    if (!srcUrl || !String(srcUrl).startsWith('data:image/')) {
       showToast('⚠️ Mã QR chưa sẵn sàng để tải xuống');
       return;
     }
-    const safeRoom = String(currentRoom || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const rawLabel = currentQrTitle
+      ? `${currentRoom || 'default'}-${currentQrTitle}`
+      : (currentRoom || 'default');
+    const safeSlug = String(rawLabel)
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48) || 'default';
     const a = document.createElement('a');
-    a.href = qrImage.src;
-    a.download = `qr-quick-share-${safeRoom}.png`;
+    a.href = srcUrl;
+    a.download = `qr-quick-share-${safeSlug}.png`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1274,7 +1292,14 @@
 
   pasteClipboardBtn.addEventListener('click', async () => {
     try {
-      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+      const hasReadText = Boolean(navigator.clipboard && typeof navigator.clipboard.readText === 'function');
+      const hasReadItems = Boolean(navigator.clipboard && typeof navigator.clipboard.read === 'function');
+      if (!hasReadText && !hasReadItems) {
+        throw new Error('Clipboard API unavailable');
+      }
+
+      let readTextErr = null;
+      if (hasReadText) {
         try {
           const text = await navigator.clipboard.readText();
           if (text && text.trim()) {
@@ -1283,10 +1308,12 @@
             await createTextItem(text, ttlSelect.value);
             return;
           }
-        } catch (_) {}
+        } catch (err) {
+          readTextErr = err;
+        }
       }
 
-      if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+      if (hasReadItems) {
         const clipItems = await navigator.clipboard.read();
         for (const clipItem of (clipItems || [])) {
           const types = Array.isArray(clipItem.types) ? clipItem.types : [];
@@ -1317,6 +1344,8 @@
             }
           }
         }
+      } else if (readTextErr) {
+        throw readTextErr;
       }
 
       showToast('⚠️ Clipboard đang trống hoặc chứa dữ liệu không hỗ trợ');
