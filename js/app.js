@@ -803,6 +803,8 @@
     }
   }
 
+  const noteTaskToggleSeq = new Map();
+
   async function toggleNoteTaskLine(itemId, lineIdx) {
     const parsedIdx = Number(lineIdx);
     if (!itemId || !Number.isFinite(parsedIdx) || parsedIdx < 0) return;
@@ -819,6 +821,9 @@
     lines[parsedIdx] = `${m[1]}[${nextMark}]${m[3]}`;
     const updatedContent = lines.join('\n');
 
+    const seq = (noteTaskToggleSeq.get(itemId) || 0) + 1;
+    noteTaskToggleSeq.set(itemId, seq);
+
     item.content = updatedContent;
     renderItems();
 
@@ -830,15 +835,21 @@
       });
       const data = await res.json();
       if (res.ok && data.success && data.item) {
-        upsertItemInState(data.item);
+        if (noteTaskToggleSeq.get(itemId) === seq) {
+          upsertItemInState(data.item);
+        }
       } else {
-        item.content = prevContent;
-        renderItems();
+        if (noteTaskToggleSeq.get(itemId) === seq) {
+          item.content = prevContent;
+          renderItems();
+        }
         showToast('❌ ' + (data.error || 'Không thể cập nhật checklist'));
       }
     } catch (_) {
-      item.content = prevContent;
-      renderItems();
+      if (noteTaskToggleSeq.get(itemId) === seq) {
+        item.content = prevContent;
+        renderItems();
+      }
       showToast('❌ Lỗi kết nối khi đồng bộ checklist');
     }
   }
@@ -1080,11 +1091,20 @@
   }
 
   function removeItemFromState(id) {
-    items = items.filter((i) => i.id !== id);
-    expandedNoteIds.delete(id);
-    selectedItemIds.delete(id);
-    if (lastClickedCheckboxId === id) {
-      lastClickedCheckboxId = null;
+    removeItemsFromState([id]);
+  }
+
+  function removeItemsFromState(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const idSet = new Set(ids);
+    items = items.filter((i) => !idSet.has(i.id));
+    for (const id of idSet) {
+      expandedNoteIds.delete(id);
+      selectedItemIds.delete(id);
+      noteTaskToggleSeq.delete(id);
+      if (lastClickedCheckboxId === id) {
+        lastClickedCheckboxId = null;
+      }
     }
     renderItems();
   }
@@ -1308,12 +1328,15 @@
       })
       .sort((a, b) => compareItemsBySortOrder(a, b, 'newest'));
 
-    if (selectedItemIds.size > 0) {
+    if (selectedItemIds.size > 0 || lastClickedCheckboxId) {
       const validIds = new Set(items.map((i) => i.id));
       for (const selId of Array.from(selectedItemIds)) {
         if (!validIds.has(selId)) {
           selectedItemIds.delete(selId);
         }
+      }
+      if (lastClickedCheckboxId && !validIds.has(lastClickedCheckboxId)) {
+        lastClickedCheckboxId = null;
       }
     }
 
@@ -1879,7 +1902,7 @@
         } else if (msg.type === 'item_deleted' && msg.id) {
           removeItemFromState(msg.id);
         } else if ((msg.type === 'items_expired' || msg.type === 'items_deleted') && Array.isArray(msg.ids)) {
-          msg.ids.forEach((id) => removeItemFromState(id));
+          removeItemsFromState(msg.ids);
         } else if (msg.type === 'room_cleared') {
           if (!msg.room || msg.room === currentRoom) {
             items = [];

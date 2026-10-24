@@ -1528,12 +1528,26 @@
           if (!trimmed) {
             return makeJsonResponse({ success: false, error: 'Content cannot be empty' }, 400);
           }
+          const prevDetected = detectType(String(found.item.content || '').trim());
+          const hadCustomTitle = Boolean(
+            found.item.title &&
+            found.item.title !== prevDetected.title
+          );
           const detected = detectType(trimmed);
           found.item.type = detected.type;
           found.item.content = detected.content;
-          found.item.title = body.title ? String(body.title).trim() : detected.title;
+          if (body.title !== undefined && String(body.title).trim()) {
+            found.item.title = String(body.title).trim();
+          } else if (hadCustomTitle) {
+            found.item.title = found.item.title;
+          } else {
+            found.item.title = detected.title;
+          }
         } else {
           found.item.content = trimmed || found.item.fileName || found.item.title || 'file';
+          if (body.title !== undefined && String(body.title).trim()) {
+            found.item.title = String(body.title).trim();
+          }
         }
       } else if (body.title !== undefined && String(body.title).trim()) {
         found.item.title = String(body.title).trim();
