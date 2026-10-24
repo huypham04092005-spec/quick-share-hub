@@ -244,9 +244,9 @@
     return { url, trailing };
   }
 
-  function renderNoteContentWithLinks(rawText) {
-    if (!rawText) return '';
-    const str = String(rawText);
+  function renderPlainTextWithLinks(textSegment) {
+    if (!textSegment) return '';
+    const str = String(textSegment);
     const urlRegex = /https?:\/\/[^\s<>"'`]+/gi;
     let result = '';
     let lastIdx = 0;
@@ -267,6 +267,28 @@
     }
     if (lastIdx < str.length) {
       result += escapeHtml(str.slice(lastIdx));
+    }
+    return result;
+  }
+
+  function renderNoteContentWithLinks(rawText) {
+    if (!rawText) return '';
+    const str = String(rawText);
+    const fenceRegex = /```([a-zA-Z0-9_+#.-]*)[ \t]*\r?\n([\s\S]*?)```/g;
+    let result = '';
+    let lastIdx = 0;
+    let match;
+    while ((match = fenceRegex.exec(str)) !== null) {
+      if (match.index > lastIdx) {
+        result += renderPlainTextWithLinks(str.slice(lastIdx, match.index));
+      }
+      const lang = (match[1] || '').trim() || 'code';
+      const rawCode = match[2].replace(/\r?\n$/, '');
+      result += `<div class="note-code-block"><div class="note-code-header"><span class="note-code-lang">${escapeHtml(lang)}</span><button type="button" class="btn btn-sm js-copy-code-btn" data-code="${escapeHtml(rawCode)}">📋 Copy Code</button></div><code class="note-code-content">${escapeHtml(rawCode)}</code></div>`;
+      lastIdx = match.index + match[0].length;
+    }
+    if (lastIdx < str.length) {
+      result += renderPlainTextWithLinks(str.slice(lastIdx));
     }
     return result;
   }
@@ -592,6 +614,25 @@
     showToast(`📥 Đã xuất file backup phòng "${currentRoom}" (.json)!`);
   }
 
+  function resolveBackupEntryTtl(entry) {
+    if (!entry || typeof entry !== 'object') return '7d';
+    const hasExplicitExpires = entry.expiresAt !== undefined || entry.expires_at !== undefined;
+    const rawExp = entry.expiresAt !== undefined ? entry.expiresAt : entry.expires_at;
+    if (hasExplicitExpires && rawExp === null) {
+      return 'never';
+    }
+    if (typeof rawExp === 'number' && Number.isFinite(rawExp)) {
+      return rawExp > Date.now() ? rawExp : '7d';
+    }
+    if (typeof entry.ttl === 'string' && entry.ttl.trim()) {
+      return entry.ttl.trim();
+    }
+    if (typeof entry.ttl === 'number' && Number.isFinite(entry.ttl)) {
+      return entry.ttl;
+    }
+    return '7d';
+  }
+
   async function importRoomBackupJson(file) {
     if (!file) return;
     try {
@@ -604,7 +645,48 @@
       }
       let restored = 0;
       for (const entry of list.slice().reverse()) {
-        if (!entry || !entry.content || entry.type === 'file') continue;
+        if (!entry || typeof entry !== 'object') continue;
+        const resolvedTtl = resolveBackupEntryTtl(entry);
+
+        if (entry.type === 'file') {
+          const fName = entry.fileName || entry.file_name || entry.title || '';
+          const fPath = entry.fileGistId || entry.filePath || entry.file_path || '';
+          if (!fName || !fPath) continue;
+          const entryContent = String(entry.content || fName);
+          const exists = items.some((i) => {
+            if (i.type !== 'file') return false;
+            const iPath = i.fileGistId || i.filePath || i.file_path || '';
+            const iName = i.fileName || i.file_name || i.title || '';
+            return (fPath && iPath === fPath) || (iName === fName && i.content === entryContent);
+          });
+          if (exists) continue;
+          const res = await fetch('/api/items', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              room: currentRoom,
+              type: 'file',
+              content: entryContent,
+              title: entry.title || fName,
+              fileName: fName,
+              filePath: fPath,
+              fileGistId: entry.fileGistId || fPath,
+              fileSize: entry.fileSize ?? entry.file_size ?? null,
+              mimeType: entry.mimeType || entry.mime_type || null,
+              isPdf: Boolean(entry.isPdf || entry.is_pdf || String(fName).toLowerCase().endsWith('.pdf')),
+              pinned: Boolean(entry.pinned),
+              ttl: resolvedTtl
+            })
+          });
+          const data = await res.json();
+          if (res.ok && data.success && data.item) {
+            upsertItemInState(data.item);
+            restored++;
+          }
+          continue;
+        }
+
+        if (!entry.content) continue;
         const exists = items.some((i) => i.content === entry.content && i.type === entry.type);
         if (exists) continue;
         const res = await fetch('/api/items', {
@@ -615,7 +697,7 @@
             content: String(entry.content),
             title: entry.title || undefined,
             pinned: Boolean(entry.pinned),
-            ttl: '7d'
+            ttl: resolvedTtl
           })
         });
         const data = await res.json();
@@ -751,13 +833,27 @@
     });
 
     if (filtered.length === 0) {
-      itemsContainer.innerHTML = `
-        <div class="empty-state">
-          <div style="font-size: 2rem; margin-bottom: 8px;">✨</div>
-          <div>Chưa có mục nào trong phòng <strong>${escapeHtml(currentRoom)}</strong>.</div>
-          <div style="font-size: 0.82rem; margin-top: 4px;">Dán Link, Ghi chú hoặc tải lên file PDF để đồng bộ tức thì sang thiết bị khác!</div>
-        </div>
-      `;
+      if (items.length > 0) {
+        itemsContainer.innerHTML = `
+          <div class="empty-state filter-empty-state">
+            <div style="font-size: 2rem; margin-bottom: 8px;">🔍</div>
+            <div>Không có mục nào khớp với bộ lọc / từ khóa hiện tại trong phòng <strong>${escapeHtml(currentRoom)}</strong>.</div>
+            <div style="margin-top: 12px;">
+              <button type="button" class="btn btn-sm btn-primary js-reset-filter-btn">
+                🔄 Xem tất cả (${items.length})
+              </button>
+            </div>
+          </div>
+        `;
+      } else {
+        itemsContainer.innerHTML = `
+          <div class="empty-state">
+            <div style="font-size: 2rem; margin-bottom: 8px;">✨</div>
+            <div>Chưa có mục nào trong phòng <strong>${escapeHtml(currentRoom)}</strong>.</div>
+            <div style="font-size: 0.82rem; margin-top: 4px;">Dán Link, Ghi chú hoặc tải lên file PDF để đồng bộ tức thì sang thiết bị khác!</div>
+          </div>
+        `;
+      }
       updateTelemetryDashboard();
       return;
     }
@@ -1564,6 +1660,37 @@
 
   // Delegated Card Actions
   itemsContainer.addEventListener('click', (e) => {
+    const resetFilterBtn = e.target.closest('.js-reset-filter-btn');
+    if (resetFilterBtn) {
+      activeFilter = 'all';
+      searchQuery = '';
+      if (searchInput) searchInput.value = '';
+      filterTabs.forEach((t) => {
+        if ((t.getAttribute('data-filter') || 'all') === 'all') {
+          t.classList.add('active');
+        } else {
+          t.classList.remove('active');
+        }
+      });
+      if (filterTabsBar && typeof filterTabsBar.querySelectorAll === 'function') {
+        filterTabsBar.querySelectorAll('.filter-tab').forEach((t) => {
+          if ((t.getAttribute('data-filter') || 'all') === 'all') {
+            t.classList.add('active');
+          } else {
+            t.classList.remove('active');
+          }
+        });
+      }
+      renderItems();
+      return;
+    }
+
+    const copyCodeBtn = e.target.closest('.js-copy-code-btn');
+    if (copyCodeBtn) {
+      copyToClipboard(copyCodeBtn.getAttribute('data-code') || '', copyCodeBtn);
+      return;
+    }
+
     const copyBtn = e.target.closest('.js-copy-btn');
     if (copyBtn) {
       copyToClipboard(copyBtn.getAttribute('data-copy'), copyBtn);
@@ -1622,6 +1749,9 @@
   // Filter Tabs & Search
   function activateFilterTab(filterValue, tabEl) {
     filterTabs.forEach((t) => t.classList.remove('active'));
+    if (filterTabsBar && typeof filterTabsBar.querySelectorAll === 'function') {
+      filterTabsBar.querySelectorAll('.filter-tab').forEach((t) => t.classList.remove('active'));
+    }
     if (tabEl && tabEl.classList) tabEl.classList.add('active');
     activeFilter = filterValue || 'all';
     renderItems();
@@ -1813,6 +1943,22 @@
     } else if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'c' || e.key === 'C' || e.code === 'KeyC')) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       copyLatestItem();
+    } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K' || e.code === 'KeyK')) {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (searchInput) {
+        searchInput.focus();
+        if (typeof searchInput.select === 'function') searchInput.select();
+      }
+    } else if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const activeEl = document.activeElement;
+      const activeTag = activeEl && activeEl.tagName ? String(activeEl.tagName).toUpperCase() : '';
+      const isEditable = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || Boolean(activeEl && activeEl.isContentEditable);
+      const anyModalOpen = [qrModal, pdfModal, roomModal, editModal].some((m) => m && m.classList && m.classList.contains('open'));
+      if (!isEditable && !anyModalOpen && searchInput) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        searchInput.focus();
+        if (typeof searchInput.select === 'function') searchInput.select();
+      }
     }
   });
 

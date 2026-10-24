@@ -1256,7 +1256,13 @@
         }
 
         const { content, ttl, title, type } = body || {};
-        if (!content || typeof content !== 'string' || !content.trim()) {
+        const rawFileName = body && (body.fileName || body.file_name || null);
+        const rawFilePath = body && (body.fileGistId || body.filePath || body.file_path || null);
+        const isFileRestore = type === 'file' && rawFileName && rawFilePath;
+        const rawContent = isFileRestore
+          ? (typeof content === 'string' && content.trim() ? content.trim() : String(rawFileName).trim())
+          : (typeof content === 'string' ? content.trim() : '');
+        if (!rawContent) {
           return makeJsonResponse({
             success: false,
             error: 'Content is required and must be a non-empty string'
@@ -1265,10 +1271,13 @@
 
         const room = normalizeRoom(body.room);
         let itemType = type;
-        let finalContent = content.trim();
+        let finalContent = rawContent;
         let finalTitle = title ? String(title).trim() : null;
 
-        if (!itemType || (itemType !== 'link' && itemType !== 'note')) {
+        if (isFileRestore) {
+          itemType = 'file';
+          if (!finalTitle) finalTitle = String(rawFileName).trim();
+        } else if (!itemType || (itemType !== 'link' && itemType !== 'note')) {
           const detected = detectType(finalContent);
           itemType = detected.type;
           finalContent = detected.content;
@@ -1288,17 +1297,40 @@
 
         const now = Date.now();
         const expiresAt = parseTTL(ttl, now);
+        const safeFileName = isFileRestore ? sanitizeOriginalName(String(rawFileName)) : null;
+        const safeMime = isFileRestore
+          ? resolveMimeType(body.mimeType || body.mime_type || '', safeFileName)
+          : null;
+        const isPdfVal = isFileRestore
+          ? ((body.isPdf || body.is_pdf || safeMime === 'application/pdf' || safeFileName.toLowerCase().endsWith('.pdf')) ? 1 : 0)
+          : 0;
+        const rawSize = body && (body.fileSize ?? body.file_size);
         const item = formatItem({
           id: randomUUID(),
           room,
           type: itemType,
           content: finalContent,
           title: finalTitle,
-          isPdf: 0,
+          filePath: isFileRestore ? String(rawFilePath) : null,
+          fileGistId: isFileRestore ? String(body.fileGistId || rawFilePath) : null,
+          fileName: safeFileName,
+          fileSize: isFileRestore && rawSize !== null && rawSize !== undefined && Number.isFinite(Number(rawSize))
+            ? Number(rawSize)
+            : null,
+          mimeType: isFileRestore ? (isPdfVal ? 'application/pdf' : safeMime) : null,
+          isPdf: isPdfVal,
           pinned: Boolean(body.pinned),
           createdAt: now,
           expiresAt
         });
+
+        if (isFileRestore) {
+          const origId = String(rawFilePath).split('_')[0];
+          const existingMemFile = cloudState.files.get(String(rawFilePath)) || cloudState.files.get(origId);
+          if (existingMemFile) {
+            cloudState.files.set(item.id, existingMemFile);
+          }
+        }
 
         const list = getRoomListRef(room);
         list.unshift(item);
