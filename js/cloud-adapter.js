@@ -1527,24 +1527,58 @@
         const lineIdx = Number(body.taskToggle.lineIndex ?? body.taskToggle.line);
         const lines = rawExisting.split('\n');
         let toggled = null;
-        if (Number.isInteger(lineIdx) && lineIdx >= 0 && lineIdx < lines.length) {
-          const rawLine = lines[lineIdx];
-          const hasCr = rawLine.endsWith('\r');
-          const cleanLine = hasCr ? rawLine.slice(0, -1) : rawLine;
-          const m = cleanLine.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
-          if (m) {
-            const currentlyChecked = m[2].toLowerCase() === 'x';
+        if (Number.isInteger(lineIdx) && lineIdx >= 0) {
+          const parseChecklistLine = (idx) => {
+            if (!Number.isInteger(idx) || idx < 0 || idx >= lines.length) return null;
+            const rawLine = lines[idx];
+            const hasCr = rawLine.endsWith('\r');
+            const cleanLine = hasCr ? rawLine.slice(0, -1) : rawLine;
+            const m = cleanLine.match(/^(\s*[-*]\s+)\[([ xX])\](.*)$/);
+            if (!m) return null;
+            return {
+              idx,
+              hasCr,
+              prefix: m[1],
+              mark: m[2],
+              suffix: m[3],
+              bodyText: (m[3] || '').trim()
+            };
+          };
+
+          const expectedText = typeof body.taskToggle.lineText === 'string' && body.taskToggle.lineText.trim()
+            ? body.taskToggle.lineText.trim()
+            : null;
+
+          let target = parseChecklistLine(lineIdx);
+          if (expectedText !== null && (!target || target.bodyText !== expectedText)) {
+            let bestMatch = null;
+            let bestDist = Infinity;
+            for (let k = 0; k < lines.length; k++) {
+              const candidate = parseChecklistLine(k);
+              if (candidate && candidate.bodyText === expectedText) {
+                const dist = Math.abs(k - lineIdx);
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestMatch = candidate;
+                }
+              }
+            }
+            target = bestMatch;
+          }
+
+          if (target) {
+            const currentlyChecked = target.mark.toLowerCase() === 'x';
             const nextChecked = typeof body.taskToggle.checked === 'boolean'
               ? body.taskToggle.checked
               : !currentlyChecked;
             const nextMark = nextChecked ? 'x' : ' ';
-            lines[lineIdx] = `${m[1]}[${nextMark}]${m[3]}${hasCr ? '\r' : ''}`;
+            lines[target.idx] = `${target.prefix}[${nextMark}]${target.suffix}${target.hasCr ? '\r' : ''}`;
             toggled = lines.join('\n');
           }
         }
         if (toggled !== null) {
           resolvedContent = toggled;
-        } else if (body.content === undefined) {
+        } else {
           return makeJsonResponse({
             success: false,
             error: 'Invalid taskToggle lineIndex or target line is not a checklist item'

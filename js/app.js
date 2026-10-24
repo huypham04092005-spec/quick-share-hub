@@ -475,7 +475,7 @@
       if (typeof localStorage !== 'undefined') {
         const key = getDraftStorageKey(room);
         const val = itemInput.value || '';
-        if (val) {
+        if (val.trim()) {
           localStorage.setItem(key, val);
         } else if (typeof localStorage.removeItem === 'function') {
           localStorage.removeItem(key);
@@ -504,7 +504,8 @@
     let saved = '';
     try {
       if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
-        saved = localStorage.getItem(getDraftStorageKey(room)) || '';
+        const raw = localStorage.getItem(getDraftStorageKey(room)) || '';
+        saved = raw.trim() ? raw : '';
       }
     } catch (_) {}
     itemInput.value = saved;
@@ -686,7 +687,7 @@
               }
             } catch (_) {}
             if (combinedShare) {
-              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h', explicitTitle);
+              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h', explicitTitle, false);
             }
           } else if (previewId) {
             const target = items.find((i) => i.id === previewId);
@@ -702,7 +703,7 @@
     }
   }
 
-  async function createTextItem(content, ttl = ttlSelect.value, title = undefined) {
+  async function createTextItem(content, ttl = ttlSelect.value, title = undefined, clearDraft = true) {
     const trimmed = (content || '').trim();
     if (!trimmed) {
       showToast('⚠️ Vui lòng nhập nội dung hoặc dán từ Clipboard!');
@@ -726,9 +727,11 @@
       });
       const data = await res.json();
       if (res.ok && data.success && data.item) {
-        itemInput.value = '';
-        clearComposerDraft(currentRoom);
-        updateComposerCounter();
+        if (clearDraft) {
+          itemInput.value = '';
+          clearComposerDraft(currentRoom);
+          updateComposerCounter();
+        }
         upsertItemInState(data.item);
         showToast('🚀 Đã chia sẻ thành công!');
       } else {
@@ -934,7 +937,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           content: updatedContent,
-          taskToggle: { lineIndex: parsedIdx, checked: nextChecked }
+          taskToggle: {
+            lineIndex: parsedIdx,
+            checked: nextChecked,
+            lineText: (m[3] || '').trim()
+          }
         })
       });
       const data = await res.json();
@@ -1261,8 +1268,8 @@
       return timeB - timeA;
     }
     if (order === 'title_asc') {
-      const labelA = String(a.fileName || a.file_name || a.title || a.content || '').trim();
-      const labelB = String(b.fileName || b.file_name || b.title || b.content || '').trim();
+      const labelA = String(a.title || a.fileName || a.file_name || a.content || '').trim();
+      const labelB = String(b.title || b.fileName || b.file_name || b.content || '').trim();
       const cmp = labelA.localeCompare(labelB, 'vi', { numeric: true, sensitivity: 'base' });
       if (cmp !== 0) return cmp;
       return timeB - timeA;
