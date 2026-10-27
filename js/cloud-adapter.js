@@ -285,7 +285,9 @@
       expiresAt,
       expires_at: expiresAt,
       pinned: Boolean(row.pinned),
-      fileGistId: row.fileGistId || filePath || null
+      fileGistId: row.fileGistId || filePath || null,
+      docText: row.docText ?? row.doc_text ?? null,
+      doc_text: row.docText ?? row.doc_text ?? null
     };
   }
 
@@ -1766,6 +1768,7 @@
       const rawRoom = formData.get('room');
       const ttl = formData.get('ttl');
       const caption = formData.get('caption') || formData.get('content');
+      const docText = formData.get('docText') || formData.get('doc_text');
       const room = normalizeRoom(typeof rawRoom === 'string' ? rawRoom : 'default');
 
       const rawFileName = fileObj.name || 'document.pdf';
@@ -1794,6 +1797,7 @@
         fileSize: bytes.byteLength,
         mimeType: isPdf ? 'application/pdf' : mimeType,
         isPdf,
+        docText: (docText && typeof docText === 'string') ? docText : null,
         createdAt: now,
         expiresAt
       });

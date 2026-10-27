@@ -204,15 +204,21 @@
       <!-- Right: PDF / Document / Image Upload -->
       <div class="panel-card">
         <div class="panel-header">
-          <div class="panel-title">📄 Tải lên File PDF / Tài liệu / Ảnh</div>
-          <span style="font-size: 0.76rem; color: var(--text-secondary);">Tối đa 50MB</span>
+          <div class="panel-title">📄 Tải lên File Word / PDF / Ảnh</div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="quickDocxToPdfBtn" type="button" class="btn btn-sm btn-emerald" title="Chuyển nhanh file Word (.docx) sang PDF không cần tải lên">
+              ⚡ Chuyển sang PDF
+            </button>
+            <input id="quickDocxToPdfInput" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display: none;" />
+            <span style="font-size: 0.76rem; color: var(--text-secondary);">Tối đa 50MB</span>
+          </div>
         </div>
 
-        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Kéo thả hoặc chọn file để tải lên">
+        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="Kéo thả hoặc chọn file Word, PDF, Tài liệu để tải lên">
           <div class="dropzone-icon">📂</div>
-          <div class="dropzone-title">Kéo thả file PDF, Ảnh, Tài liệu vào đây</div>
-          <div class="dropzone-hint">Hoặc bấm để chọn file từ thiết bị • Hỗ trợ xem trước PDF trực tiếp</div>
-          <input id="fileInput" type="file" style="display: none;" multiple />
+          <div class="dropzone-title">Kéo thả file Word (.docx), PDF, Ảnh vào đây</div>
+          <div class="dropzone-hint">Hoặc bấm để chọn file từ thiết bị • Hỗ trợ xem trước &amp; chuyển Word sang PDF trực tiếp</div>
+          <input id="fileInput" type="file" style="display: none;" multiple accept=".docx,.doc,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.txt,.md,.xlsx,.xls,.pptx,.ppt,application/*,image/*,text/*" />
         </div>
 
         <div id="uploadProgress" class="upload-progress">
@@ -228,6 +234,7 @@
         <button type="button" class="filter-tab" data-filter="pinned">📌 Đã ghim (<span id="countPinned">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="link">🔗 Link (<span id="countLink">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="note">📝 Ghi chú (<span id="countNote">0</span>)</button>
+        <button type="button" class="filter-tab" data-filter="docs">📘 Word &amp; Docs (<span id="countDocs">0</span>)</button>
         <button type="button" class="filter-tab" data-filter="file">📄 PDF &amp; File (<span id="countFile">0</span>)</button>
       </div>
 
@@ -311,8 +318,11 @@
       <div class="modal-header">
         <h3 id="pdfModalTitle">📄 Xem trước PDF</h3>
         <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <button id="wordModalPdfBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;" title="Chuyển đổi văn bản Word sang PDF và tải xuống máy">⚡ Tải xuống PDF</button>
           <button id="copyModalImageBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;">🖼️ Copy Ảnh</button>
           <button id="copyModalTextBtn" type="button" class="btn btn-sm btn-emerald" style="display: none;">📋 Copy nội dung</button>
+          <button id="wordModalPrintBtn" type="button" class="btn btn-sm" style="display: none;" title="In văn bản hoặc xuất PDF qua hộp thoại in trình duyệt">🖨️ In ấn / Xuất PDF</button>
+          <a id="wordModalDownloadDocx" href="#" download class="btn btn-sm btn-primary" style="display: none;" title="Tải file Word gốc (.docx) về máy">⬇ Tải file gốc (.docx)</a>
           <a id="pdfModalOpenTab" href="#" target="_blank" rel="noopener" class="btn btn-sm">↗ Mở tab mới</a>
           <a id="pdfModalDownload" href="#" download class="btn btn-sm btn-primary">⬇ Tải xuống PDF</a>
           <button id="closePdfModalBtn" type="button" class="btn btn-sm">✕ Đóng</button>
@@ -330,6 +340,9 @@
       </div>
       <div id="textPreviewContainer" class="modal-text-container" style="display: none;">
         <pre id="modalTextPreview" class="modal-text-preview"></pre>
+      </div>
+      <div id="wordPreviewContainer" class="modal-word-container" style="display: none;">
+        <div id="wordA4Paper" class="word-a4-paper"></div>
       </div>
     </div>
   </div>
@@ -442,6 +455,8 @@
   <div id="toastContainer" class="toast-container"></div>
 
   <script src="js/qrcode.min.js"></script>
+  <script src="js/mammoth.browser.min.js"></script>
+  <script src="js/html2pdf.bundle.min.js"></script>
   <script src="js/cloud-adapter.js"></script>
   <script src="js/app.js"></script>
 </body>

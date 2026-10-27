@@ -6,13 +6,15 @@ const CACHE_NAME = 'quick-share-hub-v12-cloud';
 const CACHE_NAME = 'quick-share-hub-v13-cloud';
 const CACHE_NAME = 'quick-share-hub-v14-cloud';
 */
-const CACHE_NAME = 'quick-share-hub-v15-cloud';
+const CACHE_NAME = 'quick-share-hub-v16-cloud';
 const STATIC_ASSETS = [
   './',
   './index.html',
   './manifest.json',
   './css/app.css',
   './js/qrcode.min.js',
+  './js/mammoth.browser.min.js',
+  './js/html2pdf.bundle.min.js',
   './js/cloud-adapter.js',
   './js/app.js',
   './icons/icon-192.svg',

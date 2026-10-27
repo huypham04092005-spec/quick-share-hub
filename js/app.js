@@ -65,6 +65,9 @@
   const countLink = document.getElementById('countLink');
   const countNote = document.getElementById('countNote');
   const countFile = document.getElementById('countFile');
+  const countDocs = document.getElementById('countDocs');
+  const quickDocxToPdfBtn = document.getElementById('quickDocxToPdfBtn');
+  const quickDocxToPdfInput = document.getElementById('quickDocxToPdfInput');
 
   // Storage & Bandwidth Dashboard Elements
   const telemetryDashboard = document.getElementById('telemetryDashboard');
@@ -119,8 +122,17 @@
   const modalImagePreview = document.getElementById('modalImagePreview');
   const textPreviewContainer = document.getElementById('textPreviewContainer');
   const modalTextPreview = document.getElementById('modalTextPreview');
+  const wordModalPdfBtn = document.getElementById('wordModalPdfBtn');
+  const wordModalPrintBtn = document.getElementById('wordModalPrintBtn');
+  const wordModalDownloadDocx = document.getElementById('wordModalDownloadDocx');
+  const wordPreviewContainer = document.getElementById('wordPreviewContainer');
+  const wordA4Paper = document.getElementById('wordA4Paper');
   let currentModalTextContent = '';
   let currentModalItemId = '';
+  let currentWordHtml = '';
+  let currentWordRawText = '';
+  let currentWordFileName = '';
+  const docxTextCache = new Map();
   let lastWakeSyncAt = 0;
 
   const editModal = document.getElementById('editModal');
@@ -822,6 +834,19 @@
       }
       formData.append('file', file, file.name);
 
+      let extractedDocText = '';
+      const lowerName = file.name.toLowerCase();
+      if (lowerName.endsWith('.docx') && window.mammoth && typeof window.mammoth.extractRawText === 'function') {
+        try {
+          const ab = await file.arrayBuffer();
+          const tr = await window.mammoth.extractRawText({ arrayBuffer: ab });
+          extractedDocText = (tr && tr.value) ? tr.value.trim() : '';
+        } catch (_) {}
+      }
+      if (extractedDocText) {
+        formData.append('docText', extractedDocText);
+      }
+
       try {
         uploadProgressBar.style.width = `${Math.round(((i + 0.5) / fileList.length) * 100)}%`;
         const res = await fetch('/api/upload', {
@@ -830,9 +855,14 @@
         });
         const data = await res.json();
         if (res.ok && data.success && data.item) {
+          if (lowerName.endsWith('.docx')) {
+            data.item.docText = extractedDocText;
+            docxTextCache.set(data.item.id, extractedDocText);
+          }
           uploadedAny = true;
           upsertItemInState(data.item);
-          showToast(`📄 Đã tải lên: ${file.name}`);
+          const isWord = lowerName.endsWith('.docx') || lowerName.endsWith('.doc');
+          showToast(`${isWord ? '📘' : '📄'} Đã tải lên: ${file.name}`);
         } else {
           showToast(`❌ Lỗi tải file ${file.name}: ${data.error || 'Thất bại'}`);
         }
@@ -1344,17 +1374,68 @@
     return timeB - timeA;
   }
 
+  function isDocItem(item) {
+    if (!item || item.type !== 'file') return false;
+    const name = String(item.fileName || item.file_name || item.title || '').toLowerCase();
+    const mime = String(item.mimeType || item.mime_type || '').toLowerCase();
+    return (
+      name.endsWith('.docx') ||
+      name.endsWith('.doc') ||
+      name.endsWith('.odt') ||
+      name.endsWith('.rtf') ||
+      name.endsWith('.xlsx') ||
+      name.endsWith('.xls') ||
+      name.endsWith('.pptx') ||
+      name.endsWith('.ppt') ||
+      mime.includes('word') ||
+      mime.includes('officedocument') ||
+      mime.includes('msword') ||
+      mime.includes('presentation') ||
+      mime.includes('spreadsheet')
+    );
+  }
+
+  function isWordDocxItem(item) {
+    if (!item || item.type !== 'file') return false;
+    const name = String(item.fileName || item.file_name || item.title || '').toLowerCase();
+    const mime = String(item.mimeType || item.mime_type || '').toLowerCase();
+    return name.endsWith('.docx') || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+
+  function isEncryptedOfficeDoc(arrayBuffer) {
+    if (!arrayBuffer || arrayBuffer.byteLength < 512) return false;
+    const bytes = new Uint8Array(arrayBuffer, 0, Math.min(arrayBuffer.byteLength, 4096));
+    // OLE Compound File header: D0 CF 11 E0 A1 B1 1A E1
+    const isOle = bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0;
+    if (!isOle) return false;
+    let str = '';
+    for (let i = 0; i < bytes.length; i++) {
+      const c = bytes[i];
+      if (c >= 32 && c <= 126) str += String.fromCharCode(c);
+    }
+    return str.includes('EncryptedPackage') || str.includes('EncryptionInfo');
+  }
+
+  function isZipPackage(arrayBuffer) {
+    if (!arrayBuffer || arrayBuffer.byteLength < 4) return false;
+    const bytes = new Uint8Array(arrayBuffer, 0, 4);
+    return bytes[0] === 0x50 && bytes[1] === 0x4b;
+  }
+
   function getFilteredSortedItems() {
     return items
       .filter((item) => {
         if (activeFilter === 'pinned') {
           if (!item.pinned) return false;
+        } else if (activeFilter === 'docs') {
+          if (!isDocItem(item)) return false;
         } else if (activeFilter !== 'all' && item.type !== activeFilter) {
           return false;
         }
         if (searchQuery) {
           const q = searchQuery.toLowerCase();
-          const hay = `${item.title || ''} ${item.content || ''} ${item.fileName || item.file_name || ''}`.toLowerCase();
+          const docText = item.docText || (docxTextCache && docxTextCache.get(item.id)) || '';
+          const hay = `${item.title || ''} ${item.content || ''} ${item.fileName || item.file_name || ''} ${docText}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -1599,6 +1680,41 @@
     }
   }
 
+  const pendingDocxIndexIds = new Set();
+  async function ensureDocxTextIndexed(item) {
+    if (!item || !isWordDocxItem(item) || pendingDocxIndexIds.has(item.id) || docxTextCache.has(item.id)) {
+      return;
+    }
+    pendingDocxIndexIds.add(item.id);
+    try {
+      let arrayBuffer = null;
+      const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+      if (isCloud && typeof window.QSHCloud.getFileBlob === 'function') {
+        const blob = await window.QSHCloud.getFileBlob(item.id);
+        if (blob) arrayBuffer = await blob.arrayBuffer();
+      }
+      if (!arrayBuffer) {
+        const res = await fetch(`/api/files/${encodeURIComponent(item.id)}/download`);
+        if (res.ok) arrayBuffer = await res.arrayBuffer();
+      }
+      if (arrayBuffer && window.mammoth && typeof window.mammoth.extractRawText === 'function') {
+        const res = await window.mammoth.extractRawText({ arrayBuffer });
+        const text = (res && res.value) ? res.value.trim() : '';
+        item.docText = text;
+        docxTextCache.set(item.id, text);
+        if (text && searchQuery && text.toLowerCase().includes(searchQuery.toLowerCase())) {
+          renderItems();
+        }
+      } else {
+        docxTextCache.set(item.id, '');
+      }
+    } catch (_) {
+      docxTextCache.set(item.id, '');
+    } finally {
+      pendingDocxIndexIds.delete(item.id);
+    }
+  }
+
   function renderItems() {
     const now = Date.now();
     // Filter out expired items client-side too, and sort pinned items first
@@ -1633,6 +1749,20 @@
     countLink.textContent = items.filter((i) => i.type === 'link').length;
     countNote.textContent = items.filter((i) => i.type === 'note').length;
     countFile.textContent = items.filter((i) => i.type === 'file').length;
+    if (countDocs) {
+      countDocs.textContent = items.filter((i) => isDocItem(i)).length;
+    }
+
+    // Lazy index raw text from docx for search if missing
+    items.forEach((item) => {
+      if (isWordDocxItem(item)) {
+        if (item.docText && !docxTextCache.has(item.id)) {
+          docxTextCache.set(item.id, item.docText);
+        } else if (!docxTextCache.has(item.id)) {
+          ensureDocxTextIndexed(item);
+        }
+      }
+    });
 
     const filtered = getFilteredSortedItems();
     updateBatchActionBar(filtered);
@@ -1718,17 +1848,20 @@
   function renderSingleCard(item) {
     const fileName = item.fileName || item.file_name || item.title || 'file';
     const lowerName = String(fileName).toLowerCase();
-    const isPdf = Boolean(item.isPdf || item.is_pdf || lowerName.endsWith('.pdf'));
     const mime = item.mimeType || item.mime_type || '';
-    const isImage = item.type === 'file' && !isPdf && (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
-    const isTextPreviewable = item.type === 'file' && !isPdf && !isImage && (
+    const isDocx = lowerName.endsWith('.docx') || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isDoc = !isDocx && (lowerName.endsWith('.doc') || mime === 'application/msword');
+    const isWord = isDocx || isDoc;
+    const isPdf = !isWord && Boolean(item.isPdf || item.is_pdf || lowerName.endsWith('.pdf'));
+    const isImage = item.type === 'file' && !isPdf && !isWord && (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isTextPreviewable = item.type === 'file' && !isPdf && !isWord && !isImage && (
       mime.startsWith('text/') ||
       mime.includes('json') ||
       mime.includes('xml') ||
       mime.includes('javascript') ||
       /\.(txt|md|json|csv|tsv|log|js|ts|py|html|css|xml|ya?ml|ini|sh|bat|sql)$/i.test(lowerName)
     );
-    const canPreviewModal = isPdf || isImage || isTextPreviewable;
+    const canPreviewModal = isDocx || isDoc || isPdf || isImage || isTextPreviewable;
     const createdAt = item.createdAt || item.created_at;
     const expiresAt = item.expiresAt || item.expires_at;
     const fileSize = item.fileSize ?? item.file_size;
@@ -1737,8 +1870,22 @@
     let badgeLabel = '📝 Ghi chú';
     if (item.type === 'link') badgeLabel = '🔗 Link';
     if (item.type === 'file') {
-      badgeClass = isPdf ? 'pdf' : 'file';
-      badgeLabel = isPdf ? '📕 PDF' : (isImage ? '🖼️ Ảnh' : '📎 File');
+      if (isDocx) {
+        badgeClass = 'docx';
+        badgeLabel = '📘 Word DOCX';
+      } else if (isDoc) {
+        badgeClass = 'word';
+        badgeLabel = '📘 Word';
+      } else if (isPdf) {
+        badgeClass = 'pdf';
+        badgeLabel = '📕 PDF';
+      } else if (isImage) {
+        badgeClass = 'file';
+        badgeLabel = '🖼️ Ảnh';
+      } else {
+        badgeClass = 'file';
+        badgeLabel = '📎 File';
+      }
     }
 
     const shareOrigin = getShareOrigin();
@@ -1790,7 +1937,7 @@
           ${customTitle ? `<div class="item-custom-title">${escapeHtml(customTitle)}</div>` : ''}
           <div class="item-file-row">
             <div class="file-info-main">
-              <span class="file-icon-box">${isPdf ? '📕' : (isImage ? '🖼️' : '📄')}</span>
+              <span class="file-icon-box">${isWord ? '📘' : (isPdf ? '📕' : (isImage ? '🖼️' : '📄'))}</span>
               <div>
                 <div class="file-name">${escapeHtml(fileName)}</div>
                 <div class="file-size">${formatBytes(fileSize)} ${mime ? '• ' + escapeHtml(mime) : ''}</div>
@@ -1850,11 +1997,22 @@
             </button>
           ` : ''}
 
-          ${canPreviewModal ? `
+          ${isDocx ? `
+            <button type="button" class="btn btn-sm btn-primary js-preview-word-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" title="Xem nội dung tài liệu Word trực tiếp trên web">
+              👁️ Xem Word
+            </button>
+            <button type="button" class="btn btn-sm btn-emerald js-convert-word-pdf-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" title="Chuyển đổi Word sang PDF tức thì (100% Client-side)">
+              ⚡ Chuyển sang PDF
+            </button>
+          ` : (isDoc ? `
+            <button type="button" class="btn btn-sm btn-primary js-preview-word-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" title="Xem thông tin tài liệu Word (.doc)">
+              👁️ Xem Word
+            </button>
+          ` : (canPreviewModal ? `
             <button type="button" class="btn btn-sm btn-primary js-preview-pdf-btn" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}">
               👁️ Xem trước ${isPdf ? 'PDF' : ''}
             </button>
-          ` : ''}
+          ` : ''))}
 
           ${item.type === 'file' ? `
             <a href="${localDownloadUrl}" download="${escapeHtml(fileName)}" data-id="${escapeHtml(item.id)}" data-name="${escapeHtml(fileName)}" class="btn btn-sm btn-emerald js-download-file-btn">
@@ -2133,13 +2291,24 @@
   function closePdfPreviewModal() {
     if (!pdfModal) return;
     pdfModal.classList.remove('open');
+    document.body.classList.remove('word-preview-open');
     if (pdfViewerFrame) pdfViewerFrame.src = 'about:blank';
     if (modalImagePreview) modalImagePreview.src = TRANSPARENT_PIXEL;
     if (modalTextPreview) modalTextPreview.textContent = '';
+    if (wordA4Paper) wordA4Paper.innerHTML = '';
+    if (wordPreviewContainer) wordPreviewContainer.style.display = 'none';
+    if (wordModalPdfBtn) wordModalPdfBtn.style.display = 'none';
+    if (wordModalPrintBtn) wordModalPrintBtn.style.display = 'none';
+    if (wordModalDownloadDocx) wordModalDownloadDocx.style.display = 'none';
     if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
     if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
+    if (pdfModalOpenTab) pdfModalOpenTab.style.display = 'inline-flex';
+    if (pdfModalDownload) pdfModalDownload.style.display = 'inline-flex';
     currentModalTextContent = '';
     currentModalItemId = '';
+    currentWordHtml = '';
+    currentWordRawText = '';
+    currentWordFileName = '';
   }
 
   function closeAllModals() {
@@ -2155,6 +2324,11 @@
 
   async function openPdfPreviewModal(id, fileName) {
     currentModalItemId = id || '';
+    currentModalTextContent = '';
+    currentWordHtml = '';
+    currentWordRawText = '';
+    currentWordFileName = '';
+
     const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
     let previewUrl = `/api/files/${encodeURIComponent(id)}/preview`;
     let downloadUrl = `/api/files/${encodeURIComponent(id)}/download`;
@@ -2176,9 +2350,11 @@
     const resolvedName = fileName || (item && (item.fileName || item.file_name || item.title)) || 'document.pdf';
     const lowerName = String(resolvedName).toLowerCase();
     const mime = (item && (item.mimeType || item.mime_type)) || '';
-    const isPdf = Boolean((item && (item.isPdf || item.is_pdf)) || mime === 'application/pdf' || lowerName.endsWith('.pdf'));
-    const isImage = !isPdf && Boolean(mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
-    const isText = !isPdf && !isImage && Boolean(
+    const isDocx = lowerName.endsWith('.docx') || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const isLegacyDoc = !isDocx && (lowerName.endsWith('.doc') || mime === 'application/msword');
+    const isPdf = !isDocx && !isLegacyDoc && Boolean((item && (item.isPdf || item.is_pdf)) || mime === 'application/pdf' || lowerName.endsWith('.pdf'));
+    const isImage = !isDocx && !isLegacyDoc && !isPdf && Boolean(mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico|bmp)$/i.test(lowerName));
+    const isText = !isDocx && !isLegacyDoc && !isPdf && !isImage && Boolean(
       mime.startsWith('text/') ||
       mime.includes('json') ||
       mime.includes('xml') ||
@@ -2195,6 +2371,214 @@
       pdfFallbackDownloadLink.href = downloadUrl;
       pdfFallbackDownloadLink.setAttribute('download', resolvedName);
     }
+
+    if (isLegacyDoc) {
+      pdfModalTitle.textContent = `📘 ${resolvedName}`;
+      currentWordFileName = resolvedName;
+      document.body.classList.add('word-preview-open');
+
+      if (wordModalPdfBtn) wordModalPdfBtn.style.display = 'none';
+      if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
+      if (wordModalPrintBtn) wordModalPrintBtn.style.display = 'none';
+      if (wordModalDownloadDocx) {
+        wordModalDownloadDocx.style.display = 'inline-flex';
+        wordModalDownloadDocx.textContent = '⬇ Tải file gốc (.doc)';
+        wordModalDownloadDocx.href = downloadUrl;
+        wordModalDownloadDocx.setAttribute('download', resolvedName);
+      }
+      if (pdfModalOpenTab) pdfModalOpenTab.style.display = 'none';
+      if (pdfModalDownload) pdfModalDownload.style.display = 'none';
+      if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
+      if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
+      pdfViewerFrame.style.display = 'none';
+      pdfViewerFrame.src = 'about:blank';
+      if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+      if (textPreviewContainer) textPreviewContainer.style.display = 'none';
+      if (wordPreviewContainer && wordA4Paper) {
+        wordA4Paper.innerHTML = `
+          <div class="word-preview-error">
+            <div class="error-icon">📘</div>
+            <div class="error-title">Tài liệu Word 97-2003 (.doc)</div>
+            <div class="error-desc">
+              Định dạng nhị phân <code>.doc</code> cũ không hỗ trợ đọc trực tiếp trong trình duyệt bằng Mammoth (chỉ hỗ trợ định dạng <code>.docx</code> chuẩn OOXML).<br>
+              Bạn có thể tải file gốc về máy hoặc mở file bằng Microsoft Word rồi lưu sang định dạng <strong>.docx</strong> để xem trước và chuyển đổi sang PDF.
+            </div>
+            <div class="error-actions">
+              <a href="${downloadUrl}" download="${escapeHtml(resolvedName)}" class="btn btn-primary btn-sm">⬇ Tải file gốc (.doc)</a>
+            </div>
+          </div>
+        `;
+        wordPreviewContainer.style.display = 'flex';
+      }
+      pdfModal.classList.add('open');
+      return;
+    }
+
+    if (isDocx) {
+      pdfModalTitle.textContent = `📘 ${resolvedName}`;
+      currentWordFileName = resolvedName;
+      document.body.classList.add('word-preview-open');
+
+      if (wordModalPdfBtn) wordModalPdfBtn.style.display = 'none';
+      if (copyModalTextBtn) copyModalTextBtn.style.display = 'none';
+      if (wordModalPrintBtn) wordModalPrintBtn.style.display = 'none';
+      if (wordModalDownloadDocx) {
+        wordModalDownloadDocx.style.display = 'inline-flex';
+        wordModalDownloadDocx.textContent = '⬇ Tải file gốc (.docx)';
+        wordModalDownloadDocx.href = downloadUrl;
+        wordModalDownloadDocx.setAttribute('download', resolvedName);
+      }
+      if (pdfModalOpenTab) pdfModalOpenTab.style.display = 'none';
+      if (pdfModalDownload) pdfModalDownload.style.display = 'none';
+      if (copyModalImageBtn) copyModalImageBtn.style.display = 'none';
+      if (pdfMobileFallbackBar) pdfMobileFallbackBar.style.display = 'none';
+      pdfViewerFrame.style.display = 'none';
+      pdfViewerFrame.src = 'about:blank';
+      if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+      if (textPreviewContainer) textPreviewContainer.style.display = 'none';
+      if (wordPreviewContainer && wordA4Paper) {
+        wordA4Paper.innerHTML = '<div style="padding: 40px; text-align: center; color: #64748b;">⏳ Đang đọc và định dạng tài liệu Word (.docx)...</div>';
+        wordPreviewContainer.style.display = 'flex';
+      }
+      pdfModal.classList.add('open');
+
+      try {
+        let arrayBuffer = null;
+        if (isCloud && typeof window.QSHCloud.getFileBlob === 'function') {
+          const blob = await window.QSHCloud.getFileBlob(id);
+          if (blob) arrayBuffer = await blob.arrayBuffer();
+        }
+        if (!arrayBuffer) {
+          const res = await fetch(`/api/files/${encodeURIComponent(id)}/download`);
+          if (res.ok) arrayBuffer = await res.arrayBuffer();
+        }
+        if (!arrayBuffer) {
+          if (wordA4Paper) {
+            wordA4Paper.innerHTML = `
+              <div class="word-preview-error">
+                <div class="error-icon">❌</div>
+                <div class="error-title">Không thể tải nội dung file Word</div>
+                <div class="error-desc">Không tìm thấy dữ liệu tệp tin hoặc kết nối máy chủ bị ngắt quãng.</div>
+              </div>
+            `;
+          }
+          return;
+        }
+
+        if (isEncryptedOfficeDoc(arrayBuffer)) {
+          if (wordA4Paper) {
+            wordA4Paper.innerHTML = `
+              <div class="word-preview-error">
+                <div class="error-icon">🔒</div>
+                <div class="error-title">Tài liệu Word được cài mật khẩu bảo vệ</div>
+                <div class="error-desc">
+                  Tài liệu này đã được mã hóa bảo mật (Password-Protected). Trình duyệt không thể giải mã nội dung khi chưa có mật khẩu.<br>
+                  Vui lòng tải file gốc về máy và mở bằng Microsoft Word để nhập mật khẩu hoặc gỡ bỏ mật khẩu bảo vệ.
+                </div>
+                <div class="error-actions">
+                  <a href="${downloadUrl}" download="${escapeHtml(resolvedName)}" class="btn btn-primary btn-sm">⬇ Tải file về máy</a>
+                </div>
+              </div>
+            `;
+          }
+          return;
+        }
+
+        if (!isZipPackage(arrayBuffer)) {
+          if (wordA4Paper) {
+            wordA4Paper.innerHTML = `
+              <div class="word-preview-error">
+                <div class="error-icon">⚠️</div>
+                <div class="error-title">Tệp tin không phải định dạng Word .docx hợp lệ</div>
+                <div class="error-desc">
+                  Tệp tin này không chứa cấu trúc gói nén chuẩn OOXML (.docx). Có thể file đã bị đổi đuôi hoặc hỏng hoàn toàn.<br>
+                  Vui lòng kiểm tra lại file gốc.
+                </div>
+                <div class="error-actions">
+                  <a href="${downloadUrl}" download="${escapeHtml(resolvedName)}" class="btn btn-primary btn-sm">⬇ Tải file về máy</a>
+                </div>
+              </div>
+            `;
+          }
+          return;
+        }
+
+        if (window.mammoth && typeof window.mammoth.convertToHtml === 'function') {
+          let htmlRes = null;
+          let rawRes = null;
+          try {
+            [htmlRes, rawRes] = await Promise.all([
+              window.mammoth.convertToHtml({ arrayBuffer }),
+              window.mammoth.extractRawText({ arrayBuffer })
+            ]);
+          } catch (mErr) {
+            const mMsg = String(mErr && mErr.message || '');
+            const isZipErr = mMsg.includes('central directory') || mMsg.includes('zip') || mMsg.includes('corrupted');
+            if (wordA4Paper) {
+              wordA4Paper.innerHTML = `
+                <div class="word-preview-error">
+                  <div class="error-icon">⚠️</div>
+                  <div class="error-title">Không thể giải mã cấu trúc tệp Word</div>
+                  <div class="error-desc">
+                    ${isZipErr
+                      ? 'Tệp tin Word này bị hỏng cấu trúc gói nén (ZIP/OOXML) hoặc được lưu bằng phần mềm không tương thích chuẩn Office Open XML.'
+                      : escapeHtml(mMsg || 'Định dạng tài liệu không hợp lệ.')}
+                    <br>Vui lòng kiểm tra lại file gốc hoặc tải về máy để mở bằng Microsoft Word.
+                  </div>
+                  <div class="error-actions">
+                    <a href="${downloadUrl}" download="${escapeHtml(resolvedName)}" class="btn btn-primary btn-sm">⬇ Tải file về máy</a>
+                  </div>
+                </div>
+              `;
+            }
+            return;
+          }
+
+          currentWordHtml = (htmlRes && htmlRes.value) ? htmlRes.value : '<p>(Tài liệu trống)</p>';
+          currentWordRawText = (rawRes && rawRes.value) ? rawRes.value.trim() : '';
+          currentModalTextContent = currentWordRawText;
+          if (currentWordRawText) {
+            docxTextCache.set(id, currentWordRawText);
+            if (item) item.docText = currentWordRawText;
+          }
+          if (wordA4Paper) {
+            wordA4Paper.innerHTML = currentWordHtml;
+          }
+
+          if (wordModalPdfBtn) wordModalPdfBtn.style.display = 'inline-flex';
+          if (copyModalTextBtn) copyModalTextBtn.style.display = 'inline-flex';
+          if (wordModalPrintBtn) wordModalPrintBtn.style.display = 'inline-flex';
+        } else {
+          if (wordA4Paper) {
+            wordA4Paper.innerHTML = `
+              <div class="word-preview-error">
+                <div class="error-icon">❌</div>
+                <div class="error-title">Thư viện đọc Word (Mammoth) chưa sẵn sàng</div>
+                <div class="error-desc">Vui lòng tải lại trang hoặc kiểm tra kết nối mạng.</div>
+              </div>
+            `;
+          }
+        }
+      } catch (err) {
+        if (wordA4Paper) {
+          wordA4Paper.innerHTML = `
+            <div class="word-preview-error">
+              <div class="error-icon">❌</div>
+              <div class="error-title">Lỗi khi đọc tài liệu Word</div>
+              <div class="error-desc">${escapeHtml(err.message || 'Lỗi không xác định')}</div>
+            </div>
+          `;
+        }
+      }
+      return;
+    }
+
+    if (wordPreviewContainer) wordPreviewContainer.style.display = 'none';
+    if (wordModalPdfBtn) wordModalPdfBtn.style.display = 'none';
+    if (wordModalPrintBtn) wordModalPrintBtn.style.display = 'none';
+    if (wordModalDownloadDocx) wordModalDownloadDocx.style.display = 'none';
+    if (pdfModalOpenTab) pdfModalOpenTab.style.display = 'inline-flex';
+    if (pdfModalDownload) pdfModalDownload.style.display = 'inline-flex';
 
     if (isImage) {
       pdfModalTitle.textContent = `🖼️ ${resolvedName}`;
@@ -2275,6 +2659,128 @@
       showToast('⚠️ Không thể tải file: dữ liệu nhị phân không còn trên Cloud Gist.');
     }
     return false;
+  }
+
+  async function exportHtmlToPdf(htmlContent, outPdfName, returnBlob = false) {
+    if (!htmlContent || !htmlContent.trim()) {
+      showToast('⚠️ Không có nội dung tài liệu để xuất PDF.');
+      return false;
+    }
+    if (!window.html2pdf) {
+      showToast('❌ Thư viện html2pdf chưa tải xong. Vui lòng thử lại sau vài giây.');
+      return false;
+    }
+
+    const exportDiv = document.createElement('div');
+    exportDiv.className = 'word-a4-paper';
+    exportDiv.style.position = 'fixed';
+    exportDiv.style.left = '-9999px';
+    exportDiv.style.top = '0';
+    exportDiv.style.width = '190mm';
+    exportDiv.style.padding = '0';
+    exportDiv.style.margin = '0';
+    exportDiv.style.background = '#ffffff';
+    exportDiv.style.color = '#1e293b';
+    exportDiv.style.boxSizing = 'border-box';
+    exportDiv.style.boxShadow = 'none';
+    exportDiv.innerHTML = htmlContent;
+    document.body.appendChild(exportDiv);
+
+    try {
+      const opt = {
+        margin: [12, 10, 12, 10],
+        filename: outPdfName,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true, logging: false },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['avoid-all', 'css', 'legacy'] }
+      };
+      const worker = window.html2pdf().set(opt).from(exportDiv);
+      if (returnBlob) {
+        return await worker.output('blob');
+      }
+      await worker.save();
+      showToast(`✅ Đã tải xuống PDF: ${outPdfName}`);
+      return true;
+    } finally {
+      exportDiv.remove();
+    }
+  }
+
+  async function convertWordItemToPdf(id, fileName) {
+    const item = items.find((i) => i.id === id);
+    const resolvedName = fileName || (item && (item.fileName || item.file_name || item.title)) || 'document.docx';
+    const lowerName = resolvedName.toLowerCase();
+
+    if (lowerName.endsWith('.doc') && !lowerName.endsWith('.docx')) {
+      showToast('⚠️ Định dạng Word cũ (.doc) không hỗ trợ chuyển đổi trực tiếp trên trình duyệt. Vui lòng mở file và lưu sang .docx.');
+      return;
+    }
+
+    const outPdfName = resolvedName.replace(/\.docx?$/i, '') + '.pdf';
+    showToast(`⚡ Đang chuyển đổi "${resolvedName}" sang PDF...`);
+
+    try {
+      let arrayBuffer = null;
+      const isCloud = Boolean(window.QSHCloud && window.QSHCloud.isCloudMode());
+      if (isCloud && typeof window.QSHCloud.getFileBlob === 'function') {
+        const blob = await window.QSHCloud.getFileBlob(id);
+        if (blob) arrayBuffer = await blob.arrayBuffer();
+      }
+      if (!arrayBuffer) {
+        const res = await fetch(`/api/files/${encodeURIComponent(id)}/download`);
+        if (res.ok) arrayBuffer = await res.arrayBuffer();
+      }
+      if (!arrayBuffer) {
+        showToast('❌ Không thể tải file Word để chuyển đổi.');
+        return;
+      }
+
+      if (isEncryptedOfficeDoc(arrayBuffer)) {
+        showToast(`🔒 File "${resolvedName}" được cài mật khẩu bảo vệ, không thể giải mã để xuất PDF.`);
+        return;
+      }
+
+      if (!isZipPackage(arrayBuffer)) {
+        showToast(`❌ File "${resolvedName}" không phải định dạng Word .docx hợp lệ.`);
+        return;
+      }
+
+      if (!window.mammoth || !window.html2pdf) {
+        showToast('❌ Thư viện chuyển đổi chưa tải xong. Vui lòng thử lại sau vài giây.');
+        return;
+      }
+
+      const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer });
+      if (!html || !html.trim()) {
+        showToast('⚠️ Tài liệu Word không có nội dung để xuất PDF.');
+        return;
+      }
+
+      await exportHtmlToPdf(html, outPdfName);
+    } catch (err) {
+      console.error('Word to PDF error:', err);
+      const msg = String(err && err.message || '');
+      if (msg.includes('central directory') || msg.includes('zip')) {
+        showToast(`❌ File "${resolvedName}" bị lỗi cấu trúc nén hoặc không phải .docx hợp lệ.`);
+      } else {
+        showToast(`❌ Lỗi chuyển đổi Word sang PDF: ${msg || 'Thất bại'}`);
+      }
+    }
+  }
+
+  async function convertModalWordToPdf() {
+    if (!currentWordHtml || !currentWordHtml.trim() || currentWordHtml.includes('word-preview-error')) {
+      showToast('⚠️ Không có nội dung tài liệu hợp lệ để chuyển sang PDF.');
+      return;
+    }
+    const outPdfName = (currentWordFileName || 'document.docx').replace(/\.docx?$/i, '') + '.pdf';
+    showToast(`⚡ Đang xuất "${outPdfName}"...`);
+    try {
+      await exportHtmlToPdf(currentWordHtml, outPdfName);
+    } catch (err) {
+      showToast(`❌ Lỗi xuất PDF: ${err.message || 'Thất bại'}`);
+    }
   }
 
   // WebSocket Real-Time Engine
@@ -2790,6 +3296,18 @@
       return;
     }
 
+    const wordBtn = e.target.closest('.js-preview-word-btn');
+    if (wordBtn) {
+      openPdfPreviewModal(wordBtn.getAttribute('data-id'), wordBtn.getAttribute('data-name'));
+      return;
+    }
+
+    const convertWordBtn = e.target.closest('.js-convert-word-pdf-btn');
+    if (convertWordBtn) {
+      convertWordItemToPdf(convertWordBtn.getAttribute('data-id'), convertWordBtn.getAttribute('data-name'));
+      return;
+    }
+
     const pdfBtn = e.target.closest('.js-preview-pdf-btn');
     if (pdfBtn) {
       openPdfPreviewModal(pdfBtn.getAttribute('data-id'), pdfBtn.getAttribute('data-name'));
@@ -3043,6 +3561,82 @@
     closePdfPreviewModal();
   });
 
+  if (wordModalPdfBtn) {
+    wordModalPdfBtn.addEventListener('click', () => {
+      convertModalWordToPdf();
+    });
+  }
+
+  if (wordModalPrintBtn) {
+    wordModalPrintBtn.addEventListener('click', () => {
+      window.print();
+    });
+  }
+
+  if (wordModalDownloadDocx) {
+    wordModalDownloadDocx.addEventListener('click', (e) => {
+      if (window.QSHCloud && window.QSHCloud.isCloudMode() && currentModalItemId) {
+        e.preventDefault();
+        triggerCloudFileDownload(currentModalItemId, currentWordFileName);
+      }
+    });
+  }
+
+  if (quickDocxToPdfBtn && quickDocxToPdfInput) {
+    quickDocxToPdfBtn.addEventListener('click', () => {
+      quickDocxToPdfInput.click();
+    });
+    quickDocxToPdfInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      const lowerName = file.name.toLowerCase();
+      if (lowerName.endsWith('.doc') && !lowerName.endsWith('.docx')) {
+        showToast('⚠️ Định dạng Word cũ (.doc) không hỗ trợ chuyển đổi trực tiếp trên trình duyệt. Vui lòng lưu file sang định dạng .docx rồi thử lại.');
+        quickDocxToPdfInput.value = '';
+        return;
+      }
+
+      const outPdfName = file.name.replace(/\.docx?$/i, '') + '.pdf';
+      showToast(`⚡ Đang chuyển đổi "${file.name}" sang PDF...`);
+      try {
+        const ab = await file.arrayBuffer();
+
+        if (isEncryptedOfficeDoc(ab)) {
+          showToast(`🔒 File "${file.name}" được cài mật khẩu bảo vệ, không thể giải mã để xuất PDF.`);
+          return;
+        }
+
+        if (!isZipPackage(ab)) {
+          showToast(`❌ File "${file.name}" không phải định dạng Word .docx hợp lệ.`);
+          return;
+        }
+
+        if (!window.mammoth || !window.html2pdf) {
+          showToast('❌ Thư viện chưa tải xong. Vui lòng thử lại sau vài giây.');
+          return;
+        }
+
+        const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer: ab });
+        if (!html || !html.trim()) {
+          showToast('⚠️ Tài liệu Word không có nội dung để xuất PDF.');
+          return;
+        }
+
+        await exportHtmlToPdf(html, outPdfName);
+      } catch (err) {
+        const msg = String(err && err.message || '');
+        if (msg.includes('central directory') || msg.includes('zip')) {
+          showToast(`❌ File "${file.name}" bị lỗi cấu trúc nén hoặc không phải .docx hợp lệ.`);
+        } else {
+          showToast(`❌ Lỗi chuyển đổi Word sang PDF: ${msg || 'Thất bại'}`);
+        }
+      } finally {
+        quickDocxToPdfInput.value = '';
+      }
+    });
+  }
+
   roomSwitchBtn.addEventListener('click', () => {
     roomNameInput.value = currentRoom === 'default' ? '' : currentRoom;
     renderRecentRooms();
@@ -3202,5 +3796,20 @@
   fetchPublicOrigin();
   fetchItems();
   connectWebSocket();
+
+  window.QSHWord = {
+    isEncryptedOfficeDoc,
+    isZipPackage,
+    exportHtmlToPdf,
+    openPdfPreviewModal,
+    closePdfPreviewModal,
+    convertModalWordToPdf,
+    convertWordItemToPdf,
+    upsertItemInState,
+    renderItems,
+    getFilteredSortedItems,
+    ensureDocxTextIndexed,
+    docxTextCache
+  };
 })();
 
