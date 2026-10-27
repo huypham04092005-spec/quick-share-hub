@@ -471,8 +471,10 @@
     files: new Map(), // itemId -> { bytes: Uint8Array, mimeType, fileName, isPdf, blobUrl }
     fileTrash: new Map(), // fileRef -> { bytes: Uint8Array, mimeType, fileName, isPdf, blobUrl }
     deletedIds: new Set(),
+    unsyncedItemIds: new Set(),
     clearedRoomsAt: new Map(),
     dirtyRooms: new Set(),
+    dirtyVersions: new Map(),
     syncTimer: null,
     syncQueue: Promise.resolve(),
     lastLatencyMs: 42,
@@ -480,7 +482,8 @@
   };
 
   function isPersistentRoom(room) {
-    if (/^(t[1234]_|room_\d|board_sync_)/.test(room)) {
+    if (typeof room !== 'string') return false;
+    if (/^(t[1234]_|room_\d|board_sync_|test)/i.test(room) || room.includes("'") || room.includes(';')) {
       return false;
     }
     return true;
@@ -492,6 +495,7 @@
       for (const delId of parsed.deletedIds) {
         if (typeof delId === 'string' && delId) {
           cloudState.deletedIds.add(delId);
+          cloudState.unsyncedItemIds.delete(delId);
           cloudState.files.delete(delId);
         }
       }
@@ -529,10 +533,17 @@
         const remoteTs = Number(existingRemote.updatedAt ?? existingRemote.createdAt ?? 0);
         if (localTs > remoteTs) {
           byId.set(item.id, item);
-        } else if (localTs === remoteTs && item.fileGistId && !existingRemote.fileGistId) {
+        } else if (
+          localTs === remoteTs &&
+          (cloudState.unsyncedItemIds.has(item.id) || (item.fileGistId && !existingRemote.fileGistId))
+        ) {
           byId.set(item.id, item);
         }
-      } else if (allowKeepUnsyncedLocal || (syncCutoffAt > 0 && localTs > syncCutoffAt)) {
+      } else if (
+        allowKeepUnsyncedLocal ||
+        cloudState.unsyncedItemIds.has(item.id) ||
+        (syncCutoffAt > 0 && localTs > syncCutoffAt)
+      ) {
         byId.set(item.id, item);
       }
     }
@@ -562,8 +573,7 @@
         const res = await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}?_t=${Date.now()}`, {
           headers: {
             'Authorization': 'Bearer ' + getCloudToken(),
-            'Accept': 'application/vnd.github+json',
-            'Cache-Control': 'no-cache'
+            'Accept': 'application/vnd.github+json'
           }
         });
         cloudState.lastLatencyMs = Math.max(12, Date.now() - t0);
@@ -571,9 +581,20 @@
           const gist = await res.json();
           if (gist && gist.files) {
             for (const [fname, fileObj] of Object.entries(gist.files)) {
-              if (fname.startsWith('room_') && fname.endsWith('.json') && fileObj.content) {
+              if (
+                fname.startsWith('room_') &&
+                fname.endsWith('.json') &&
+                fileObj &&
+                (fileObj.content || (fileObj.truncated && fileObj.raw_url))
+              ) {
                 try {
-                  const parsed = JSON.parse(fileObj.content);
+                  let rawRoomJson = fileObj.content || '';
+                  if (fileObj.truncated && fileObj.raw_url) {
+                    const rawRes = await nativeFetch(fileObj.raw_url);
+                    if (rawRes.ok) rawRoomJson = await rawRes.text();
+                  }
+                  if (!rawRoomJson) continue;
+                  const parsed = JSON.parse(rawRoomJson);
                   const rName = normalizeRoom(parsed.room || fname.slice(5, -5));
                   ingestRemoteRoomMeta(rName, parsed);
                   if (Array.isArray(parsed.items)) {
@@ -598,6 +619,7 @@
   function scheduleRoomGistFlush(room) {
     if (!isPersistentRoom(room)) return;
     cloudState.dirtyRooms.add(room);
+    cloudState.dirtyVersions.set(room, (cloudState.dirtyVersions.get(room) || 0) + 1);
     if (cloudState.syncTimer) clearTimeout(cloudState.syncTimer);
     cloudState.syncTimer = setTimeout(() => {
       cloudState.syncTimer = null;
@@ -611,41 +633,59 @@
       cloudState.syncTimer = null;
     }
     if (cloudState.dirtyRooms.size === 0) return cloudState.syncQueue;
-    const roomsToFlush = Array.from(cloudState.dirtyRooms);
-    cloudState.dirtyRooms.clear();
 
     cloudState.syncQueue = cloudState.syncQueue.then(async () => {
+      if (cloudState.dirtyRooms.size === 0) return;
+      const roomsToFlush = Array.from(cloudState.dirtyRooms);
+      const versionSnap = new Map();
+      for (const r of roomsToFlush) {
+        versionSnap.set(r, cloudState.dirtyVersions.get(r) || 0);
+      }
+
       try {
         const t0 = Date.now();
-        // Read-before-write merge to prevent cross-device overwrite races
-        const getRes = await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}?_t=${Date.now()}`, {
-          headers: {
-            'Authorization': 'Bearer ' + getCloudToken(),
-            'Accept': 'application/vnd.github+json',
-            'Cache-Control': 'no-cache'
-          }
-        });
+        // Read-before-write merge to prevent cross-device overwrite races (isolated try-catch so PATCH always runs)
         let remoteGistFiles = {};
-        if (getRes.ok) {
-          const gData = await getRes.json();
-          remoteGistFiles = (gData && gData.files) || {};
-          cloudState.lastFetchedAt = Date.now();
-        }
+        try {
+          const getRes = await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}?_t=${Date.now()}`, {
+            headers: {
+              'Authorization': 'Bearer ' + getCloudToken(),
+              'Accept': 'application/vnd.github+json'
+            }
+          });
+          if (getRes.ok) {
+            const gData = await getRes.json();
+            remoteGistFiles = (gData && gData.files) || {};
+            cloudState.lastFetchedAt = Date.now();
+          }
+        } catch (_) {}
 
         const filesPayload = {};
+        const flushedItemIds = [];
         for (const r of roomsToFlush) {
           const safeFileKey = `room_${r.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`;
           let remoteItems = [];
-          if (remoteGistFiles[safeFileKey] && remoteGistFiles[safeFileKey].content) {
+          const rFileObj = remoteGistFiles[safeFileKey];
+          if (rFileObj && (rFileObj.content || (rFileObj.truncated && rFileObj.raw_url))) {
             try {
-              const parsed = JSON.parse(remoteGistFiles[safeFileKey].content);
-              ingestRemoteRoomMeta(r, parsed);
-              if (Array.isArray(parsed.items)) remoteItems = parsed.items;
+              let rawRoomJson = rFileObj.content || '';
+              if (rFileObj.truncated && rFileObj.raw_url) {
+                const rawRes = await nativeFetch(rFileObj.raw_url);
+                if (rawRes.ok) rawRoomJson = await rawRes.text();
+              }
+              if (rawRoomJson) {
+                const parsed = JSON.parse(rawRoomJson);
+                ingestRemoteRoomMeta(r, parsed);
+                if (Array.isArray(parsed.items)) remoteItems = parsed.items;
+              }
             } catch (_) {}
           }
           const localItems = cloudState.rooms.get(r) || [];
           const merged = mergeRoomItems(localItems, remoteItems, r);
           cloudState.rooms.set(r, merged);
+          for (const mItem of merged) {
+            if (mItem && mItem.id) flushedItemIds.push(mItem.id);
+          }
           const recentDeletedIds = Array.from(cloudState.deletedIds).slice(-500);
           filesPayload[safeFileKey] = {
             content: JSON.stringify({
@@ -658,7 +698,7 @@
           };
         }
 
-        await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}`, {
+        const patchRes = await nativeFetch(`https://api.github.com/gists/${DB_GIST_ID}`, {
           method: 'PATCH',
           headers: {
             'Authorization': 'Bearer ' + getCloudToken(),
@@ -668,6 +708,16 @@
           body: JSON.stringify({ files: filesPayload })
         });
         cloudState.lastLatencyMs = Math.max(15, Date.now() - t0);
+        if (patchRes && patchRes.ok) {
+          for (const id of flushedItemIds) {
+            cloudState.unsyncedItemIds.delete(id);
+          }
+          for (const r of roomsToFlush) {
+            if ((cloudState.dirtyVersions.get(r) || 0) === versionSnap.get(r)) {
+              cloudState.dirtyRooms.delete(r);
+            }
+          }
+        }
       } catch (_) {}
     });
     return cloudState.syncQueue;
@@ -764,18 +814,22 @@
         };
       }
       if (parsed && Number(parsed.chunkCount) > 0) {
-        const parts = [];
-        for (let c = 0; c < Number(parsed.chunkCount); c++) {
+        const count = Number(parsed.chunkCount);
+        const chunkPromises = [];
+        for (let c = 0; c < count; c++) {
           const key = `chunk_${String(c).padStart(3, '0')}.b64`;
           const cObj = gist.files && gist.files[key];
           if (!cObj) return null;
-          let chunkText = cObj.content || '';
           if (cObj.truncated && cObj.raw_url) {
-            const cRes = await nativeFetch(cObj.raw_url);
-            chunkText = await cRes.text();
+            chunkPromises.push(
+              nativeFetch(cObj.raw_url).then((cRes) => (cRes.ok ? cRes.text() : null))
+            );
+          } else {
+            chunkPromises.push(Promise.resolve(cObj.content || ''));
           }
-          parts.push(chunkText);
         }
+        const parts = await Promise.all(chunkPromises);
+        if (parts.some((p) => p === null)) return null;
         return {
           bytes: base64ToUint8(parts.join('')),
           mimeType: parsed.mimeType || 'application/octet-stream',
@@ -859,6 +913,7 @@
       cloudState.rooms.set(normalized, list);
     } else if (payload.type === 'item_deleted' && payload.id) {
       cloudState.deletedIds.add(payload.id);
+      cloudState.unsyncedItemIds.delete(payload.id);
       cloudState.files.delete(payload.id);
       cloudState.rooms.set(normalized, list.filter((i) => i.id !== payload.id));
     } else if ((payload.type === 'items_deleted' || payload.type === 'items_expired') && Array.isArray(payload.ids)) {
@@ -866,11 +921,15 @@
       for (const id of idSet) {
         if (typeof id === 'string' && id) {
           cloudState.deletedIds.add(id);
+          cloudState.unsyncedItemIds.delete(id);
           cloudState.files.delete(id);
         }
       }
       cloudState.rooms.set(normalized, list.filter((i) => !idSet.has(i.id)));
     } else if (payload.type === 'room_cleared') {
+      for (const item of list) {
+        if (item && item.id) cloudState.unsyncedItemIds.delete(item.id);
+      }
       cloudState.clearedRoomsAt.set(normalized, Date.now());
       cloudState.rooms.set(normalized, []);
     }
@@ -1202,6 +1261,7 @@
             roomExpired.push(item.id);
             expiredItems.push(item);
             cloudState.deletedIds.add(item.id);
+            cloudState.unsyncedItemIds.delete(item.id);
             archiveCloudFileToTrash(item);
             cloudState.files.delete(item.id);
           } else {
@@ -1246,6 +1306,7 @@
       cloudState.rooms.set(room, []);
       for (const item of clearedItems) {
         cloudState.deletedIds.add(item.id);
+        cloudState.unsyncedItemIds.delete(item.id);
         archiveCloudFileToTrash(item);
         cloudState.files.delete(item.id);
         if (item.fileGistId && !isFileRefReferencedInCloud(item.fileGistId)) {
@@ -1310,6 +1371,7 @@
         if (!found) continue;
         if (targetRoom && found.room !== targetRoom) continue;
         cloudState.deletedIds.add(id);
+        cloudState.unsyncedItemIds.delete(id);
         found.list.splice(found.idx, 1);
         archiveCloudFileToTrash(found.item);
         cloudState.files.delete(id);
@@ -1466,6 +1528,7 @@
           }
         }
 
+        cloudState.unsyncedItemIds.add(item.id);
         const list = getRoomListRef(room);
         list.unshift(item);
         scheduleRoomGistFlush(room);
@@ -1503,6 +1566,7 @@
         : !found.item.pinned;
       found.item.updatedAt = now;
       found.item.updated_at = now;
+      cloudState.unsyncedItemIds.add(found.item.id);
       scheduleRoomGistFlush(found.room);
       broadcastRoomEvent(found.room, { type: 'item_created', item: found.item });
       return makeJsonResponse({ success: true, item: found.item }, 200);
@@ -1647,6 +1711,7 @@
       }
       found.item.updatedAt = now;
       found.item.updated_at = now;
+      cloudState.unsyncedItemIds.add(found.item.id);
       scheduleRoomGistFlush(found.room);
       broadcastRoomEvent(found.room, { type: 'item_created', item: found.item });
       return makeJsonResponse({ success: true, item: found.item }, 200);
@@ -1665,6 +1730,7 @@
         return makeJsonResponse({ success: false, error: 'Item not found' }, 404);
       }
       cloudState.deletedIds.add(id);
+      cloudState.unsyncedItemIds.delete(id);
       found.list.splice(found.idx, 1);
       archiveCloudFileToTrash(found.item);
       cloudState.files.delete(id);
@@ -1745,6 +1811,9 @@
 
       // Upload binary payload to dedicated secret Gist for persistent rooms
       const gistId = await uploadBinaryFileToCloudGist(item, bytes);
+      const finishedAt = Date.now();
+      item.updatedAt = finishedAt;
+      item.updated_at = finishedAt;
       if (gistId) {
         item.fileGistId = gistId;
         item.filePath = gistId;
@@ -1752,9 +1821,13 @@
         cloudState.fileTrash.set(gistId, fileMemEntry);
       }
 
+      cloudState.unsyncedItemIds.add(item.id);
       const list = getRoomListRef(room);
       list.unshift(item);
       scheduleRoomGistFlush(room);
+      if (gistId) {
+        await flushDirtyRoomsToGist();
+      }
       broadcastRoomEvent(room, { type: 'item_created', item });
 
       return makeJsonResponse({ success: true, item }, 201);

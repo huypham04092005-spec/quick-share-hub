@@ -747,7 +747,7 @@
               }
             } catch (_) {}
             if (combinedShare) {
-              await createTextItem(combinedShare, ttlSelect ? ttlSelect.value : '24h', explicitTitle, false);
+              await createTextItem(combinedShare, (ttlSelect && ttlSelect.value) ? ttlSelect.value : 'never', explicitTitle, false);
             }
           } else if (previewId) {
             const target = items.find((i) => i.id === previewId);
@@ -763,7 +763,7 @@
     }
   }
 
-  async function createTextItem(content, ttl = ttlSelect.value, title = undefined, clearDraft = true) {
+  async function createTextItem(content, ttl = (ttlSelect && ttlSelect.value) ? ttlSelect.value : 'never', title = undefined, clearDraft = true) {
     const trimmed = (content || '').trim();
     if (!trimmed) {
       showToast('⚠️ Vui lòng nhập nội dung hoặc dán từ Clipboard!');
@@ -816,7 +816,7 @@
       const file = fileList[i];
       const formData = new FormData();
       formData.append('room', currentRoom);
-      formData.append('ttl', ttlSelect.value);
+      formData.append('ttl', (ttlSelect && ttlSelect.value) ? ttlSelect.value : 'never');
       if (optionalCaption) {
         formData.append('caption', optionalCaption);
       }
@@ -3157,7 +3157,12 @@
 
   // Auto-sync from 24/7 Cloud Gist on mobile/desktop wake-up or tab focus
   function handleAppWakeOrFocus() {
-    if (document.visibilityState && document.visibilityState !== 'visible') return;
+    if (document.visibilityState && document.visibilityState !== 'visible') {
+      if (window.QSHCloud && typeof window.QSHCloud.flushDirtyRoomsToGist === 'function') {
+        try { window.QSHCloud.flushDirtyRoomsToGist(); } catch (_) {}
+      }
+      return;
+    }
     const now = Date.now();
     if (now - lastWakeSyncAt < 3500) return;
     lastWakeSyncAt = now;

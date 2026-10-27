@@ -1,4 +1,4 @@
-// public/sw.js
+// public/sw.js (build: 2026-10-27-cors-ttl-fix)
 /* History:
 const CACHE_NAME = 'quick-share-hub-v10-cloud';
 const CACHE_NAME = 'quick-share-hub-v11-cloud';
