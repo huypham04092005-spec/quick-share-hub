@@ -1,0 +1,8 @@
+# Test and scratch artifacts
+.agents/
+ORIGINAL_REQUEST.md
+*.docx
+test_adv_*.html
+test_e2e_page.html
+__pycache__/
+*.pyc

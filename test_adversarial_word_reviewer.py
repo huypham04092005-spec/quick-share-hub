@@ -57,13 +57,28 @@ def create_valid_docx_with_image(path):
         z.writestr('word/_rels/document.xml.rels', doc_rels)
         z.writestr('word/media/image1.png', png_bytes)
         
+        w_drawing = (
+            '<w:p><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/wordprocessingDrawing">'
+            '<wp:extent cx="100000" cy="100000"/>'
+            '<wp:docPr id="1" name="Picture 1"/>'
+            '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:nvPicPr><pic:cNvPr id="0" name="Picture 1"/><pic:cNvPicPr/></pic:nvPicPr>'
+            '<pic:blipFill><a:blip r:embed="rIdImg" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+            '<w:p><w:r><w:pict><v:shape id="_x0000_i1025" style="width:100pt;height:100pt" xmlns:v="urn:schemas-microsoft-com:vml">'
+            '<v:imagedata r:id="rIdImg" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
+            '</v:shape></w:pict></w:r></w:p>'
+        )
         doc_xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n'
             '  <w:body>\n'
             '    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Biochemistry Enzymology Report</w:t></w:r></w:p>\n'
             '    <w:p><w:r><w:t>Michaelis-Menten kinetics with embedded diagnostic gel electrophoresis image:</w:t></w:r></w:p>\n'
-            '    <w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rIdImg"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>\n'
+            f'    {w_drawing}\n'
             '    <w:tbl>\n'
             '      <w:tr><w:tc><w:p><w:r><w:t>Enzyme</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Km (mM)</w:t></w:r></w:p></w:tc></w:tr>\n'
             '      <w:tr><w:tc><w:p><w:r><w:t>Hexokinase IV (Glucokinase)</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>10.0</w:t></w:r></w:p></w:tc></w:tr>\n'
@@ -276,7 +291,7 @@ def run_adversarial_suite():
 
           check("ValidDocHtmlRendered", Boolean(wordA4 && wordA4.innerHTML.includes('Biochemistry Enzymology Report')), `wordA4 content: ${wordA4 ? wordA4.innerHTML.slice(0, 300) : 'none'}`);
           check("ValidDocTableRendered", wordA4 && wordA4.querySelector('table') !== null, "Table rendered in A4 paper");
-          check("ValidDocImageRendered", wordA4 && wordA4.querySelector('img') !== null, "Embedded image parsed and rendered in A4 paper");
+          check("ValidDocImageRendered", wordA4 && wordA4.querySelector('img') !== null, `Embedded image: ${wordA4 ? wordA4.innerHTML : 'none'}`);
           check("ValidPdfBtnVisible", pdfBtn && pdfBtn.style.display !== 'none', "PDF button visible");
           check("ValidPrintBtnVisible", printBtn && printBtn.style.display !== 'none', "Print button visible");
           check("ValidCopyBtnVisible", copyBtn && copyBtn.style.display !== 'none', "Copy button visible");
